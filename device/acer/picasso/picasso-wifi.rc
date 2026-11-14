@@ -1,0 +1,8 @@
+# PICASSO: bcmdhd встроен в ядро — сообщаем фреймворку, что драйвер загружен
+on post-fs-data
+    setprop wlan.driver.status ok
+
+# PICASSO: wpa_supplicant (nl80211) открывает /dev/rfkill — как в CM12.1 (ueventd.picasso.rc:30)
+on post-fs-data
+    chmod 0660 /dev/rfkill
+    chown wifi wifi /dev/rfkill

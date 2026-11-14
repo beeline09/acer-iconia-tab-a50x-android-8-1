@@ -1,0 +1,58 @@
+diff --git a/service/java/com/android/server/wifi/WifiNative.java b/service/java/com/android/server/wifi/WifiNative.java
+index 5b12a3648..af29c8ca9 100644
+--- a/service/java/com/android/server/wifi/WifiNative.java
++++ b/service/java/com/android/server/wifi/WifiNative.java
+@@ -1700,6 +1700,9 @@ public class WifiNative {
+         registerNatives();
+     }
+ 
++    // picasso: wifi_set_mode (libhardware_legacy) — станция/AP режим
++    public native static boolean setMode(int mode);
++
+     private static native int registerNatives();
+     /* kernel logging support */
+     private static native byte[] readKernelLogNative();
+diff --git a/service/java/com/android/server/wifi/WifiStateMachine.java b/service/java/com/android/server/wifi/WifiStateMachine.java
+index ac7d748bb..6f0417952 100644
+--- a/service/java/com/android/server/wifi/WifiStateMachine.java
++++ b/service/java/com/android/server/wifi/WifiStateMachine.java
+@@ -1640,6 +1640,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
+      */
+     public void setSupplicantRunning(boolean enable) {
+         if (enable) {
++            WifiNative.setMode(0);
+             sendMessage(CMD_START_SUPPLICANT);
+         } else {
+             sendMessage(CMD_STOP_SUPPLICANT);
+@@ -1651,6 +1652,7 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiRss
+      */
+     public void setHostApRunning(SoftApModeConfiguration wifiConfig, boolean enable) {
+         if (enable) {
++            WifiNative.setMode(1);
+             sendMessage(CMD_START_AP, wifiConfig);
+         } else {
+             sendMessage(CMD_STOP_AP);
+diff --git a/service/jni/com_android_server_wifi_WifiNative.cpp b/service/jni/com_android_server_wifi_WifiNative.cpp
+index 09a5ebf7c..842de81bd 100644
+--- a/service/jni/com_android_server_wifi_WifiNative.cpp
++++ b/service/jni/com_android_server_wifi_WifiNative.cpp
+@@ -31,6 +31,11 @@
+ namespace android {
+ 
+ 
++
++// picasso: TODO(wifi-этап): wifi.0 HAL-shim над bcmdhd; пока заглушка
++static jboolean android_net_wifi_setMode(JNIEnv* env, jclass cls, jint type) {
++    return JNI_TRUE;
++}
+ static jbyteArray android_net_wifi_readKernelLog(JNIEnv *env, jclass cls) {
+     JNIHelper helper(env);
+     ALOGV("Reading kernel logs");
+@@ -80,6 +85,7 @@ static jbyteArray android_net_wifi_readKernelLog(JNIEnv *env, jclass cls) {
+ static JNINativeMethod gWifiMethods[] = {
+     /* name, signature, funcPtr */
+     {"readKernelLogNative", "()[B", (void*)android_net_wifi_readKernelLog},
++    {"setMode", "(I)Z", (void*)android_net_wifi_setMode},
+ };
+ 
+ /* User to register native functions */

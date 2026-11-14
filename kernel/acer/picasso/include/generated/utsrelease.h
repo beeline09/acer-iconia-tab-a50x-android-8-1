@@ -1,0 +1,1 @@
+#define UTS_RELEASE "3.8.13.28-digetx-thor-g3c9dc265c9a"

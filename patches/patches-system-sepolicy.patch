@@ -1,0 +1,1195 @@
+diff --git a/interfacer.te b/interfacer.te
+new file mode 100644
+index 000000000..45dcd6b4f
+--- /dev/null
++++ b/interfacer.te
+@@ -0,0 +1,63 @@
++#
++# Theme Interfacer needs additional permissions when not running with system_server
++# projekt.interfacer.
++#
++#
++type interfacer, domain;
++
++# Add Theme Interfacer to domains
++net_domain(interfacer)
++app_domain(interfacer)
++binder_service(interfacer)
++
++# Modify system dalvik-cache
++allow interfacer dalvikcache_data_file:dir r_dir_perms;
++allow interfacer dalvikcache_data_file:file rw_file_perms;
++
++# Read and write /data/data subdirectory.
++allow interfacer system_app_data_file:dir create_dir_perms;
++allow interfacer system_app_data_file:{ file lnk_file } create_file_perms;
++
++# /data/resource-cache
++r_dir_file(interfacer, resourcecache_data_file)
++
++# Read wallpaper file.
++allow interfacer wallpaper_file:file r_file_perms;
++
++# Read icon file.
++allow interfacer icon_file:file r_file_perms;
++
++# Set bootanimation
++allow interfacer bootanim:process { getsched setsched };
++
++# Backup of wallpaper imagery uses temporary hard links to avoid data churn
++allow interfacer { system_data_file wallpaper_file }:file link;
++
++# Manage ringtones.
++allow interfacer ringtone_file:dir { create_dir_perms relabelto };
++allow interfacer ringtone_file:file create_file_perms;
++
++# System file accesses.
++allow interfacer kernel:system module_request;
++allow interfacer system_data_file:dir create_dir_perms;
++allow interfacer system_data_file:file create_file_perms;
++allow interfacer system_file:dir { r_dir_perms rmdir };
++
++# Allow handling of theme assets
++allow interfacer theme_data_file:dir create_dir_perms;
++allow interfacer theme_data_file:file create_file_perms;
++
++# Modify system properties
++set_prop(interfacer, theme_prop)
++
++# Edit files in /sdcard
++allow interfacer media_rw_data_file:dir rw_dir_perms;
++allow interfacer media_rw_data_file:file rw_file_perms;
++
++# Services
++allow interfacer activity_service:service_manager find;
++allow interfacer connectivity_service:service_manager find;
++allow interfacer display_service:service_manager find;
++allow interfacer mount_service:service_manager find;
++allow interfacer network_management_service:service_manager find;
++allow interfacer overlay_service:service_manager find;
+diff --git a/private/app.te b/private/app.te
+index 9251ed9cb..aa9c5d77e 100644
+--- a/private/app.te
++++ b/private/app.te
+@@ -540,3 +540,4 @@ neverallow {
+   -bluetooth
+   -system_app
+ } bluetooth_prop:file create_file_perms;
++
+diff --git a/private/app.te.pre-picasso b/private/app.te.pre-picasso
+new file mode 100644
+index 000000000..9251ed9cb
+--- /dev/null
++++ b/private/app.te.pre-picasso
+@@ -0,0 +1,542 @@
++###
++### Domain for all zygote spawned apps
++###
++### This file is the base policy for all zygote spawned apps.
++### Other policy files, such as isolated_app.te, untrusted_app.te, etc
++### extend from this policy. Only policies which should apply to ALL
++### zygote spawned apps should be added here.
++###
++
++# TODO: deal with tmpfs_domain pub/priv split properly
++# Read system properties managed by zygote.
++allow appdomain zygote_tmpfs:file read;
++
++# WebView and other application-specific JIT compilers
++allow appdomain self:process execmem;
++
++allow appdomain ashmem_device:chr_file execute;
++
++# Receive and use open file descriptors inherited from zygote.
++allow appdomain zygote:fd use;
++
++# gdbserver for ndk-gdb reads the zygote.
++# valgrind needs mmap exec for zygote
++allow appdomain zygote_exec:file rx_file_perms;
++
++# Notify zygote of death;
++allow appdomain zygote:process sigchld;
++
++# Place process into foreground / background
++allow appdomain cgroup:dir { search write };
++allow appdomain cgroup:file rw_file_perms;
++
++# Read /data/dalvik-cache.
++allow appdomain dalvikcache_data_file:dir { search getattr };
++allow appdomain dalvikcache_data_file:file r_file_perms;
++
++# Read the /sdcard and /mnt/sdcard symlinks
++allow { appdomain -isolated_app } rootfs:lnk_file r_file_perms;
++allow { appdomain -isolated_app } tmpfs:lnk_file r_file_perms;
++
++# Search /storage/emulated tmpfs mount.
++allow appdomain tmpfs:dir r_dir_perms;
++
++# Notify zygote of the wrapped process PID when using --invoke-with.
++allow appdomain zygote:fifo_file write;
++
++userdebug_or_eng(`
++  # Allow apps to create and write method traces in /data/misc/trace.
++  allow appdomain method_trace_data_file:dir w_dir_perms;
++  allow appdomain method_trace_data_file:file { create w_file_perms };
++')
++
++# Notify shell and adbd of death when spawned via runas for ndk-gdb.
++allow appdomain shell:process sigchld;
++allow appdomain adbd:process sigchld;
++
++# child shell or gdbserver pty access for runas.
++allow appdomain devpts:chr_file { getattr read write ioctl };
++
++# Use pipes and sockets provided by system_server via binder or local socket.
++allow appdomain system_server:fd use;
++allow appdomain system_server:fifo_file rw_file_perms;
++allow appdomain system_server:unix_stream_socket { read write setopt getattr getopt shutdown };
++allow appdomain system_server:tcp_socket { read write getattr getopt shutdown };
++
++# Communication with other apps via fifos
++allow appdomain appdomain:fifo_file rw_file_perms;
++
++# Communicate with surfaceflinger.
++allow appdomain surfaceflinger:unix_stream_socket { read write setopt getattr getopt shutdown };
++
++# App sandbox file accesses.
++allow { appdomain -isolated_app } app_data_file:dir create_dir_perms;
++allow { appdomain -isolated_app } app_data_file:notdevfile_class_set create_file_perms;
++
++# Traverse into expanded storage
++allow appdomain mnt_expand_file:dir r_dir_perms;
++
++# Keychain and user-trusted credentials
++r_dir_file(appdomain, keychain_data_file)
++allow appdomain misc_user_data_file:dir r_dir_perms;
++allow appdomain misc_user_data_file:file r_file_perms;
++
++# TextClassifier
++r_dir_file({ appdomain -isolated_app }, textclassifier_data_file)
++
++# Access to OEM provided data and apps
++allow appdomain oemfs:dir r_dir_perms;
++allow appdomain oemfs:file rx_file_perms;
++
++# Execute the shell or other system executables.
++allow { appdomain -ephemeral_app -untrusted_v2_app } shell_exec:file rx_file_perms;
++allow { appdomain -ephemeral_app -untrusted_v2_app } toolbox_exec:file rx_file_perms;
++allow { appdomain -ephemeral_app -untrusted_v2_app } system_file:file x_file_perms;
++not_full_treble(`allow { appdomain -ephemeral_app -untrusted_v2_app } vendor_file:file x_file_perms;')
++
++# Renderscript needs the ability to read directories on /system
++allow appdomain system_file:dir r_dir_perms;
++allow appdomain system_file:lnk_file { getattr open read };
++# Renderscript specific permissions to open /system/vendor/lib64.
++not_full_treble(`
++    allow appdomain vendor_file_type:dir r_dir_perms;
++    allow appdomain vendor_file_type:lnk_file { getattr open read };
++')
++
++full_treble_only(`
++    # For looking up Renderscript vendor drivers
++    allow { appdomain -isolated_app } vendor_file:dir { open read };
++')
++
++# Allow apps access to /vendor/app except for privileged
++# apps which cannot be in /vendor.
++r_dir_file({ appdomain -ephemeral_app -untrusted_v2_app }, vendor_app_file)
++allow { appdomain -ephemeral_app -untrusted_v2_app } vendor_app_file:file execute;
++
++# Allow apps access to /vendor/overlay
++r_dir_file(appdomain, vendor_overlay_file)
++
++# Allow apps access to /vendor/framework
++# for vendor provided libraries.
++r_dir_file(appdomain, vendor_framework_file)
++
++# Execute dex2oat when apps call dexclassloader
++allow appdomain dex2oat_exec:file rx_file_perms;
++
++# Read/write wallpaper file (opened by system).
++allow appdomain wallpaper_file:file { getattr read write };
++
++# Read/write cached ringtones (opened by system).
++allow appdomain ringtone_file:file { getattr read write };
++
++# Read ShortcutManager icon files (opened by system).
++allow appdomain shortcut_manager_icons:file { getattr read };
++
++# Read icon file (opened by system).
++allow appdomain icon_file:file { getattr read };
++
++# Old stack dumping scheme : append to a global trace file (/data/anr/traces.txt).
++#
++# TODO: All of these permissions except for anr_data_file:file append can be
++# withdrawn once we've switched to the new stack dumping mechanism, see b/32064548
++# and the rules below.
++allow appdomain anr_data_file:dir search;
++allow appdomain anr_data_file:file { open append };
++
++# New stack dumping scheme : request an output FD from tombstoned via a unix
++# domain socket.
++#
++# Allow apps to connect and write to the tombstoned java trace socket in
++# order to dump their traces. Also allow them to append traces to pipes
++# created by dumptrace. (Also see the rules below where they are given
++# additional permissions to dumpstate pipes for other aspects of bug report
++# creation).
++unix_socket_connect(appdomain, tombstoned_java_trace, tombstoned)
++allow appdomain tombstoned:fd use;
++allow appdomain dumpstate:fifo_file append;
++
++# Allow apps to send dump information to dumpstate
++allow appdomain dumpstate:fd use;
++allow appdomain dumpstate:unix_stream_socket { read write getopt getattr shutdown };
++allow appdomain dumpstate:fifo_file { write getattr };
++allow appdomain shell_data_file:file { write getattr };
++
++# Write profiles /data/misc/profiles
++allow appdomain user_profile_data_file:dir { search write add_name };
++allow appdomain user_profile_data_file:file create_file_perms;
++
++# Send heap dumps to system_server via an already open file descriptor
++# % adb shell am set-watch-heap com.android.systemui 1048576
++# % adb shell dumpsys procstats --start-testing
++# debuggable builds only.
++userdebug_or_eng(`
++  allow appdomain heapdump_data_file:file append;
++')
++
++# Write to /proc/net/xt_qtaguid/ctrl file.
++allow appdomain qtaguid_proc:file rw_file_perms;
++# read /proc/net/xt_qtguid/stats
++r_dir_file({ appdomain -ephemeral_app}, proc_net)
++# Everybody can read the xt_qtaguid resource tracking misc dev.
++# So allow all apps to read from /dev/xt_qtaguid.
++allow appdomain qtaguid_device:chr_file r_file_perms;
++
++# Grant GPU access to all processes started by Zygote.
++# They need that to render the standard UI.
++allow { appdomain -isolated_app } gpu_device:chr_file rw_file_perms;
++
++# Use the Binder.
++binder_use(appdomain)
++# Perform binder IPC to binder services.
++binder_call(appdomain, binderservicedomain)
++# Perform binder IPC to other apps.
++binder_call(appdomain, appdomain)
++# Perform binder IPC to ephemeral apps.
++binder_call(appdomain, ephemeral_app)
++
++# TODO(b/36375899): Replace this with hal_client_domain once mediacodec is properly attributized
++# as OMX HAL
++hwbinder_use({ appdomain  -isolated_app })
++allow { appdomain -isolated_app } hal_omx_hwservice:hwservice_manager find;
++allow { appdomain -isolated_app } hidl_token_hwservice:hwservice_manager find;
++
++# Talk with graphics composer fences
++allow appdomain hal_graphics_composer:fd use;
++
++# Already connected, unnamed sockets being passed over some other IPC
++# hence no sock_file or connectto permission. This appears to be how
++# Chrome works, may need to be updated as more apps using isolated services
++# are examined.
++allow appdomain appdomain:unix_stream_socket { getopt getattr read write shutdown };
++
++# Backup ability for every app. BMS opens and passes the fd
++# to any app that has backup ability. Hence, no open permissions here.
++allow appdomain backup_data_file:file { read write getattr };
++allow appdomain cache_backup_file:file { read write getattr };
++allow appdomain cache_backup_file:dir getattr;
++# Backup ability using 'adb backup'
++allow appdomain system_data_file:lnk_file r_file_perms;
++allow appdomain system_data_file:file { getattr read };
++
++# Allow read/stat of /data/media files passed by Binder or local socket IPC.
++allow { appdomain -isolated_app } media_rw_data_file:file { read getattr };
++
++# Read and write /data/data/com.android.providers.telephony files passed over Binder.
++allow { appdomain -isolated_app } radio_data_file:file { read write getattr };
++
++# Allow access to external storage; we have several visible mount points under /storage
++# and symlinks to primary storage at places like /storage/sdcard0 and /mnt/user/0/primary
++allow { appdomain -isolated_app -ephemeral_app } storage_file:dir r_dir_perms;
++allow { appdomain -isolated_app -ephemeral_app } storage_file:lnk_file r_file_perms;
++allow { appdomain -isolated_app -ephemeral_app } mnt_user_file:dir r_dir_perms;
++allow { appdomain -isolated_app -ephemeral_app } mnt_user_file:lnk_file r_file_perms;
++
++# Read/write visible storage
++allow { appdomain -isolated_app -ephemeral_app } fuse:dir create_dir_perms;
++allow { appdomain -isolated_app -ephemeral_app } fuse:file create_file_perms;
++allow { appdomain -isolated_app -ephemeral_app } sdcardfs:dir create_dir_perms;
++allow { appdomain -isolated_app -ephemeral_app } sdcardfs:file create_file_perms;
++# This should be removed if sdcardfs is modified to alter the secontext for its
++# accesses to the underlying FS.
++allow { appdomain -isolated_app -ephemeral_app } { media_rw_data_file vfat }:dir create_dir_perms;
++allow { appdomain -isolated_app -ephemeral_app } { media_rw_data_file vfat }:file create_file_perms;
++
++# Access OBBs (vfat images) mounted by vold (b/17633509)
++# File write access allowed for FDs returned through Storage Access Framework
++allow { appdomain -isolated_app -ephemeral_app } vfat:dir r_dir_perms;
++allow { appdomain -isolated_app -ephemeral_app } vfat:file rw_file_perms;
++
++# Allow apps to use the USB Accessory interface.
++# http://developer.android.com/guide/topics/connectivity/usb/accessory.html
++#
++# USB devices are first opened by the system server (USBDeviceManagerService)
++# and the file descriptor is passed to the right Activity via binder.
++allow { appdomain -isolated_app -ephemeral_app } usb_device:chr_file { read write getattr ioctl };
++allow { appdomain -isolated_app -ephemeral_app } usbaccessory_device:chr_file { read write getattr };
++
++# For art.
++allow appdomain dalvikcache_data_file:file execute;
++allow appdomain dalvikcache_data_file:lnk_file r_file_perms;
++
++# Allow any app to read shared RELRO files.
++allow appdomain shared_relro_file:dir search;
++allow appdomain shared_relro_file:file r_file_perms;
++
++# Allow apps to read/execute installed binaries
++allow appdomain apk_data_file:dir r_dir_perms;
++allow appdomain apk_data_file:file rx_file_perms;
++
++# /data/resource-cache
++allow appdomain resourcecache_data_file:file r_file_perms;
++allow appdomain resourcecache_data_file:dir r_dir_perms;
++
++# logd access
++read_logd(appdomain)
++control_logd({ appdomain -ephemeral_app untrusted_v2_app })
++# application inherit logd write socket (urge is to deprecate this long term)
++allow appdomain zygote:unix_dgram_socket write;
++
++allow { appdomain -isolated_app -ephemeral_app } keystore:keystore_key { get_state get insert delete exist list sign verify };
++
++use_keystore({ appdomain -isolated_app -ephemeral_app })
++
++allow appdomain console_device:chr_file { read write };
++
++# only allow unprivileged socket ioctl commands
++allowxperm { appdomain -bluetooth } self:{ rawip_socket tcp_socket udp_socket }
++  ioctl { unpriv_sock_ioctls unpriv_tty_ioctls };
++
++allow { appdomain -isolated_app } ion_device:chr_file rw_file_perms;
++# TODO is write really necessary ?
++auditallow { appdomain userdebug_or_eng(`-su') } ion_device:chr_file { write append };
++
++# TODO(b/36375899) replace with hal_client_domain for mediacodec (hal_omx)
++get_prop({ appdomain -isolated_app }, hwservicemanager_prop);
++
++# Allow app access to mediacodec (IOMX HAL)
++binder_call({ appdomain -isolated_app }, mediacodec)
++
++# Allow AAudio apps to use shared memory file descriptors from the HAL
++allow { appdomain -isolated_app } hal_audio:fd use;
++
++# Allow app to access shared memory created by camera HAL1
++allow { appdomain -isolated_app } hal_camera:fd use;
++
++# RenderScript always-passthrough HAL
++allow { appdomain -isolated_app } hal_renderscript_hwservice:hwservice_manager find;
++
++# TODO: switch to meminfo service
++allow appdomain proc_meminfo:file r_file_perms;
++
++# For app fuse.
++allow appdomain app_fuse_file:file { getattr read append write };
++
++pdx_client({ appdomain -isolated_app -ephemeral_app }, display_client)
++pdx_client({ appdomain -isolated_app -ephemeral_app }, display_manager)
++pdx_client({ appdomain -isolated_app -ephemeral_app }, display_vsync)
++pdx_client({ appdomain -isolated_app -ephemeral_app }, performance_client)
++# Apps do not directly open the IPC socket for bufferhubd.
++pdx_use({ appdomain -isolated_app -ephemeral_app }, bufferhub_client)
++
++###
++### CTS-specific rules
++###
++
++# For cts/tests/tests/permission/src/android/permission/cts/FileSystemPermissionTest.java.
++# testRunAsHasCorrectCapabilities
++allow appdomain runas_exec:file getattr;
++# Others are either allowed elsewhere or not desired.
++
++# Apps receive an open tun fd from the framework for
++# device traffic. Do not allow untrusted app to directly open tun_device
++allow { appdomain -isolated_app -ephemeral_app } tun_device:chr_file { read write getattr ioctl append };
++
++# Connect to adbd and use a socket transferred from it.
++# This is used for e.g. adb backup/restore.
++allow appdomain adbd:unix_stream_socket connectto;
++allow appdomain adbd:fd use;
++allow appdomain adbd:unix_stream_socket { getattr getopt ioctl read write shutdown };
++
++allow appdomain cache_file:dir getattr;
++
++# Allow apps to run with asanwrapper.
++with_asan(`allow appdomain asanwrapper_exec:file rx_file_perms;')
++
++###
++### Neverallow rules
++###
++### These are things that Android apps should NEVER be able to do
++###
++
++# Superuser capabilities.
++# bluetooth requires net_admin and wake_alarm.
++neverallow { appdomain -bluetooth } self:capability *;
++neverallow { appdomain -bluetooth } self:capability2 *;
++
++# Block device access.
++neverallow appdomain dev_type:blk_file { read write };
++
++# Access to any of the following character devices.
++neverallow appdomain {
++    audio_device
++    camera_device
++    dm_device
++    radio_device
++    rpmsg_device
++    video_device
++}:chr_file { read write };
++
++# Note: Try expanding list of app domains in the future.
++neverallow { untrusted_app isolated_app shell } graphics_device:chr_file { read write };
++
++neverallow { appdomain -nfc } nfc_device:chr_file
++    { read write };
++neverallow { appdomain -bluetooth } hci_attach_dev:chr_file
++    { read write };
++neverallow appdomain tee_device:chr_file { read write };
++
++# Privileged netlink socket interfaces.
++neverallow appdomain
++    domain:{
++        netlink_tcpdiag_socket
++        netlink_nflog_socket
++        netlink_xfrm_socket
++        netlink_audit_socket
++        netlink_dnrt_socket
++    } *;
++
++# These messages are broadcast messages from the kernel to userspace.
++# Do not allow the writing of netlink messages, which has been a source
++# of rooting vulns in the past.
++neverallow appdomain domain:netlink_kobject_uevent_socket { write append };
++
++# Sockets under /dev/socket that are not specifically typed.
++neverallow appdomain socket_device:sock_file write;
++
++# Unix domain sockets.
++neverallow appdomain adbd_socket:sock_file write;
++neverallow { appdomain -radio } rild_socket:sock_file write;
++neverallow appdomain vold_socket:sock_file write;
++neverallow appdomain zygote_socket:sock_file write;
++
++# ptrace access to non-app domains.
++neverallow appdomain { domain -appdomain }:process ptrace;
++
++# Write access to /proc/pid entries for any non-app domain.
++neverallow appdomain { domain -appdomain }:file write;
++
++# signal access to non-app domains.
++# sigchld allowed for parent death notification.
++# signull allowed for kill(pid, 0) existence test.
++# All others prohibited.
++neverallow appdomain { domain -appdomain }:process
++    { sigkill sigstop signal };
++
++# Transition to a non-app domain.
++# Exception for the shell and su domains, can transition to runas, etc.
++# Exception for crash_dump.
++neverallow { appdomain -shell userdebug_or_eng(`-su') } { domain -appdomain -crash_dump }:process
++    { transition };
++neverallow { appdomain -shell userdebug_or_eng(`-su') } { domain -appdomain }:process
++    { dyntransition };
++
++# Write to rootfs.
++neverallow appdomain rootfs:dir_file_class_set
++    { create write setattr relabelfrom relabelto append unlink link rename };
++
++# Write to /system.
++neverallow appdomain system_file:dir_file_class_set
++    { create write setattr relabelfrom relabelto append unlink link rename };
++
++# Write to entrypoint executables.
++neverallow appdomain exec_type:file
++    { create write setattr relabelfrom relabelto append unlink link rename };
++
++# Write to system-owned parts of /data.
++# This is the default type for anything under /data not otherwise
++# specified in file_contexts.  Define a different type for portions
++# that should be writable by apps.
++neverallow appdomain system_data_file:dir_file_class_set
++    { create write setattr relabelfrom relabelto append unlink link rename };
++
++# Write to various other parts of /data.
++neverallow appdomain drm_data_file:dir_file_class_set
++    { create write setattr relabelfrom relabelto append unlink link rename };
++neverallow { appdomain -platform_app }
++    apk_data_file:dir_file_class_set
++    { create write setattr relabelfrom relabelto append unlink link rename };
++neverallow { appdomain -platform_app }
++    apk_tmp_file:dir_file_class_set
++    { create write setattr relabelfrom relabelto append unlink link rename };
++neverallow { appdomain -platform_app }
++    apk_private_data_file:dir_file_class_set
++    { create write setattr relabelfrom relabelto append unlink link rename };
++neverallow { appdomain -platform_app }
++    apk_private_tmp_file:dir_file_class_set
++    { create write setattr relabelfrom relabelto append unlink link rename };
++neverallow { appdomain -shell }
++    shell_data_file:dir_file_class_set
++    { create setattr relabelfrom relabelto append unlink link rename };
++neverallow { appdomain -bluetooth }
++    bluetooth_data_file:dir_file_class_set
++    { create write setattr relabelfrom relabelto append unlink link rename };
++neverallow appdomain
++    keystore_data_file:dir_file_class_set
++    { create write setattr relabelfrom relabelto append unlink link rename };
++neverallow appdomain
++    systemkeys_data_file:dir_file_class_set
++    { create write setattr relabelfrom relabelto append unlink link rename };
++neverallow appdomain
++    wifi_data_file:dir_file_class_set
++    { create write setattr relabelfrom relabelto append unlink link rename };
++neverallow appdomain
++    dhcp_data_file:dir_file_class_set
++    { create write setattr relabelfrom relabelto append unlink link rename };
++
++# access tmp apk files
++neverallow { appdomain -untrusted_app_all -platform_app -priv_app }
++    { apk_tmp_file apk_private_tmp_file }:dir_file_class_set *;
++
++neverallow untrusted_app_all { apk_tmp_file apk_private_tmp_file }:{ devfile_class_set dir fifo_file lnk_file sock_file } *;
++neverallow untrusted_app_all { apk_tmp_file apk_private_tmp_file }:file ~{ getattr read };
++
++# Access to factory files.
++neverallow appdomain efs_file:dir_file_class_set write;
++neverallow { appdomain -shell } efs_file:dir_file_class_set read;
++
++# Write to various pseudo file systems.
++neverallow { appdomain -bluetooth -nfc }
++    sysfs:dir_file_class_set write;
++neverallow appdomain
++    proc:dir_file_class_set write;
++
++# Access to syslog(2) or /proc/kmsg.
++neverallow appdomain kernel:system { syslog_read syslog_mod syslog_console };
++
++# SELinux is not an API for apps to use
++neverallow { appdomain -shell } *:security { compute_av check_context };
++neverallow { appdomain -shell } *:netlink_selinux_socket *;
++
++# Ability to perform any filesystem operation other than statfs(2).
++# i.e. no mount(2), unmount(2), etc.
++neverallow appdomain fs_type:filesystem ~getattr;
++
++# prevent creation/manipulation of globally readable symlinks
++neverallow appdomain {
++  apk_data_file
++  cache_file
++  cache_recovery_file
++  dev_type
++  rootfs
++  system_file
++  tmpfs
++}:lnk_file no_w_file_perms;
++
++# Blacklist app domains not allowed to execute from /data
++neverallow {
++  bluetooth
++  isolated_app
++  nfc
++  radio
++  shared_relro
++  system_app
++} {
++  data_file_type
++  -dalvikcache_data_file
++  -system_data_file # shared libs in apks
++  -apk_data_file
++}:file no_x_file_perms;
++
++# Applications should use the activity model for receiving events
++neverallow {
++  appdomain
++  -shell # bugreport
++} input_device:chr_file ~getattr;
++
++# Do not allow access to Bluetooth-related system properties except for a few whitelisted domains.
++# neverallow rules for access to Bluetooth-related data files are above.
++neverallow {
++  appdomain
++  -bluetooth
++  -system_app
++} bluetooth_prop:file create_file_perms;
+diff --git a/private/domain.te b/private/domain.te
+index d37a0bd26..2fe42e321 100644
+--- a/private/domain.te
++++ b/private/domain.te
+@@ -16,3 +16,4 @@ neverallow {
+ 
+ # Limit ability to generate hardware unique device ID attestations to priv_apps
+ neverallow { domain -priv_app } *:keystore_key gen_unique_id;
++
+diff --git a/private/domain.te.pre-picasso b/private/domain.te.pre-picasso
+new file mode 100644
+index 000000000..d37a0bd26
+--- /dev/null
++++ b/private/domain.te.pre-picasso
+@@ -0,0 +1,18 @@
++# Transition to crash_dump when /system/bin/crash_dump* is executed.
++# This occurs when the process crashes.
++domain_auto_trans(domain, crash_dump_exec, crash_dump);
++allow domain crash_dump:process sigchld;
++
++# Limit ability to ptrace or read sensitive /proc/pid files of processes
++# with other UIDs to these whitelisted domains.
++neverallow {
++  domain
++  -vold
++  -dumpstate
++  -storaged
++  -system_server
++  userdebug_or_eng(`-perfprofd')
++} self:capability sys_ptrace;
++
++# Limit ability to generate hardware unique device ID attestations to priv_apps
++neverallow { domain -priv_app } *:keystore_key gen_unique_id;
+diff --git a/private/property_contexts b/private/property_contexts
+index 8eb2f28b2..1bb297d0c 100644
+--- a/private/property_contexts
++++ b/private/property_contexts
+@@ -112,3 +112,6 @@ wlan.                   u:object_r:wifi_prop:s0
+ 
+ # hwservicemanager properties
+ hwservicemanager.       u:object_r:hwservicemanager_prop:s0
++
++# --- picasso 7.1 перенос ---
++sys.refresh_theme       u:object_r:theme_prop:s0
+diff --git a/private/property_contexts.pre-picasso b/private/property_contexts.pre-picasso
+new file mode 100644
+index 000000000..8eb2f28b2
+--- /dev/null
++++ b/private/property_contexts.pre-picasso
+@@ -0,0 +1,114 @@
++##########################
++# property service keys
++#
++#
++net.rmnet               u:object_r:net_radio_prop:s0
++net.gprs                u:object_r:net_radio_prop:s0
++net.ppp                 u:object_r:net_radio_prop:s0
++net.qmi                 u:object_r:net_radio_prop:s0
++net.lte                 u:object_r:net_radio_prop:s0
++net.cdma                u:object_r:net_radio_prop:s0
++net.dns                 u:object_r:net_dns_prop:s0
++sys.usb.config          u:object_r:system_radio_prop:s0
++ril.                    u:object_r:radio_prop:s0
++ro.ril.                 u:object_r:radio_prop:s0
++gsm.                    u:object_r:radio_prop:s0
++persist.radio           u:object_r:radio_prop:s0
++
++net.                    u:object_r:system_prop:s0
++dev.                    u:object_r:system_prop:s0
++ro.runtime.             u:object_r:system_prop:s0
++ro.runtime.firstboot    u:object_r:firstboot_prop:s0
++hw.                     u:object_r:system_prop:s0
++ro.hw.                  u:object_r:system_prop:s0
++sys.                    u:object_r:system_prop:s0
++sys.cppreopt            u:object_r:cppreopt_prop:s0
++sys.powerctl            u:object_r:powerctl_prop:s0
++sys.usb.ffs.            u:object_r:ffs_prop:s0
++service.                u:object_r:system_prop:s0
++dhcp.                   u:object_r:dhcp_prop:s0
++dhcp.bt-pan.result      u:object_r:pan_result_prop:s0
++bluetooth.              u:object_r:bluetooth_prop:s0
++
++debug.                  u:object_r:debug_prop:s0
++debug.db.               u:object_r:debuggerd_prop:s0
++dumpstate.              u:object_r:dumpstate_prop:s0
++dumpstate.options       u:object_r:dumpstate_options_prop:s0
++log.                    u:object_r:log_prop:s0
++log.tag                 u:object_r:log_tag_prop:s0
++log.tag.WifiHAL         u:object_r:wifi_log_prop:s0
++security.perf_harden    u:object_r:shell_prop:s0
++service.adb.root        u:object_r:shell_prop:s0
++service.adb.tcp.port    u:object_r:shell_prop:s0
++
++persist.audio.          u:object_r:audio_prop:s0
++persist.bluetooth.      u:object_r:bluetooth_prop:s0
++persist.debug.          u:object_r:persist_debug_prop:s0
++persist.logd.           u:object_r:logd_prop:s0
++persist.logd.security   u:object_r:device_logging_prop:s0
++persist.logd.logpersistd        u:object_r:logpersistd_logging_prop:s0
++logd.logpersistd        u:object_r:logpersistd_logging_prop:s0
++persist.log.tag         u:object_r:log_tag_prop:s0
++persist.mmc.            u:object_r:mmc_prop:s0
++persist.netd.stable_secret      u:object_r:netd_stable_secret_prop:s0
++persist.sys.            u:object_r:system_prop:s0
++persist.sys.safemode    u:object_r:safemode_prop:s0
++ro.sys.safemode         u:object_r:safemode_prop:s0
++persist.sys.audit_safemode      u:object_r:safemode_prop:s0
++persist.service.        u:object_r:system_prop:s0
++persist.service.bdroid. u:object_r:bluetooth_prop:s0
++persist.security.       u:object_r:system_prop:s0
++persist.vendor.overlay.  u:object_r:overlay_prop:s0
++ro.boot.vendor.overlay.  u:object_r:overlay_prop:s0
++ro.boottime.             u:object_r:boottime_prop:s0
++ro.serialno             u:object_r:serialno_prop:s0
++ro.boot.btmacaddr       u:object_r:bluetooth_prop:s0
++ro.boot.serialno        u:object_r:serialno_prop:s0
++ro.bt.                  u:object_r:bluetooth_prop:s0
++
++# Boolean property set by system server upon boot indicating
++# if device owner is provisioned.
++ro.device_owner         u:object_r:device_logging_prop:s0
++
++# selinux non-persistent properties
++selinux.restorecon_recursive   u:object_r:restorecon_prop:s0
++
++# default property context
++*                       u:object_r:default_prop:s0
++
++# data partition encryption properties
++vold.                   u:object_r:vold_prop:s0
++ro.crypto.              u:object_r:vold_prop:s0
++
++# ro.build.fingerprint is either set in /system/build.prop, or is
++# set at runtime by system_server.
++ro.build.fingerprint    u:object_r:fingerprint_prop:s0
++
++ro.persistent_properties.ready  u:object_r:persistent_properties_ready_prop:s0
++
++# ctl properties
++ctl.bootanim            u:object_r:ctl_bootanim_prop:s0
++ctl.dumpstate           u:object_r:ctl_dumpstate_prop:s0
++ctl.fuse_               u:object_r:ctl_fuse_prop:s0
++ctl.mdnsd               u:object_r:ctl_mdnsd_prop:s0
++ctl.ril-daemon          u:object_r:ctl_rildaemon_prop:s0
++ctl.bugreport           u:object_r:ctl_bugreport_prop:s0
++ctl.console             u:object_r:ctl_console_prop:s0
++ctl.                    u:object_r:ctl_default_prop:s0
++
++# NFC properties
++nfc.                    u:object_r:nfc_prop:s0
++
++# These properties are not normally set by processes other than init.
++# They are only distinguished here for setting by qemu-props on the
++# emulator/goldfish.
++config.                 u:object_r:config_prop:s0
++ro.config.              u:object_r:config_prop:s0
++dalvik.                 u:object_r:dalvik_prop:s0
++ro.dalvik.              u:object_r:dalvik_prop:s0
++
++# Shared between system server and wificond
++wlan.                   u:object_r:wifi_prop:s0
++
++# hwservicemanager properties
++hwservicemanager.       u:object_r:hwservicemanager_prop:s0
+diff --git a/private/seapp_contexts b/private/seapp_contexts
+index a97fc7055..2509bc97a 100644
+--- a/private/seapp_contexts
++++ b/private/seapp_contexts
+@@ -108,3 +108,5 @@ user=_app isV2App=true isEphemeralApp=true domain=ephemeral_app type=app_data_fi
+ user=_app isPrivApp=true domain=priv_app type=app_data_file levelFrom=user
+ user=_app minTargetSdkVersion=26 domain=untrusted_app type=app_data_file levelFrom=user
+ user=_app domain=untrusted_app_25 type=app_data_file levelFrom=user
++
++# --- picasso 7.1 перенос ---
+diff --git a/private/seapp_contexts.pre-picasso b/private/seapp_contexts.pre-picasso
+new file mode 100644
+index 000000000..a97fc7055
+--- /dev/null
++++ b/private/seapp_contexts.pre-picasso
+@@ -0,0 +1,110 @@
++# Input selectors:
++#       isSystemServer (boolean)
++#       isEphemeralApp (boolean)
++#       isV2App (boolean)
++#       isOwner (boolean)
++#       user (string)
++#       seinfo (string)
++#       name (string)
++#       path (string)
++#       isPrivApp (boolean)
++#       minTargetSdkVersion (unsigned integer)
++# isSystemServer=true can only be used once.
++# An unspecified isSystemServer defaults to false.
++# isEphemeralApp=true will match apps marked by PackageManager as Ephemeral
++# isV2App=true will match apps in the v2 app sandbox.
++# isOwner=true will only match for the owner/primary user.
++# isOwner=false will only match for secondary users.
++# If unspecified, the entry can match either case.
++# An unspecified string selector will match any value.
++# A user string selector that ends in * will perform a prefix match.
++# user=_app will match any regular app UID.
++# user=_isolated will match any isolated service UID.
++# isPrivApp=true will only match for applications preinstalled in
++#       /system/priv-app.
++# minTargetSdkVersion will match applications with a targetSdkVersion
++#       greater than or equal to the specified value. If unspecified,
++#       it has a default value of 0.
++# All specified input selectors in an entry must match (i.e. logical AND).
++# Matching is case-insensitive.
++#
++# Precedence rules (see external/selinux/libselinux/src/android/android.c seapp_context_cmp()):
++#       (1) isSystemServer=true before isSystemServer=false.
++#       (2) Specified isEphemeralApp= before unspecified isEphemeralApp= boolean.
++#       (3) Specified isV2App= before unspecified isV2App= boolean.
++#       (4) Specified isOwner= before unspecified isOwner= boolean.
++#       (5) Specified user= string before unspecified user= string.
++#       (6) Fixed user= string before user= prefix (i.e. ending in *).
++#       (7) Longer user= prefix before shorter user= prefix.
++#       (8) Specified seinfo= string before unspecified seinfo= string.
++#           ':' character is reserved and may not be used.
++#       (9) Specified name= string before unspecified name= string.
++#       (10) Specified path= string before unspecified path= string.
++#       (11) Specified isPrivApp= before unspecified isPrivApp= boolean.
++#       (12) Higher value of minTargetSdkVersion= before lower value of minTargetSdkVersion=
++#              integer. Note that minTargetSdkVersion= defaults to 0 if unspecified.
++#
++# Outputs:
++#       domain (string)
++#       type (string)
++#       levelFrom (string; one of none, all, app, or user)
++#       level (string)
++# Only entries that specify domain= will be used for app process labeling.
++# Only entries that specify type= will be used for app directory labeling.
++# levelFrom=user is only supported for _app or _isolated UIDs.
++# levelFrom=app or levelFrom=all is only supported for _app UIDs.
++# level may be used to specify a fixed level for any UID.
++#
++#
++# Neverallow Assertions
++# Additional compile time assertion checks can be added as well. The assertion
++# rules are lines beginning with the keyword neverallow. Full support for PCRE
++# regular expressions exists on all input and output selectors. Neverallow
++# rules are never output to the built seapp_contexts file. Like all keywords,
++# neverallows are case-insensitive. A neverallow is asserted when all key value
++# inputs are matched on a key value rule line.
++#
++
++# only the system server can be in system_server domain
++neverallow isSystemServer=false domain=system_server
++neverallow isSystemServer="" domain=system_server
++
++# system domains should never be assigned outside of system uid
++neverallow user=((?!system).)* domain=system_app
++neverallow user=((?!system).)* type=system_app_data_file
++
++# anything with a non-known uid with a specified name should have a specified seinfo
++neverallow user=_app name=.* seinfo=""
++neverallow user=_app name=.* seinfo=default
++
++# neverallow shared relro to any other domain
++# and neverallow any other uid into shared_relro
++neverallow user=shared_relro domain=((?!shared_relro).)*
++neverallow user=((?!shared_relro).)* domain=shared_relro
++
++# neverallow non-isolated uids into isolated_app domain
++# and vice versa
++neverallow user=_isolated domain=((?!isolated_app).)*
++neverallow user=((?!_isolated).)* domain=isolated_app
++
++# uid shell should always be in shell domain, however non-shell
++# uid's can be in shell domain
++neverallow user=shell domain=((?!shell).)*
++
++# Ephemeral Apps must run in the ephemeral_app domain
++neverallow isEphemeralApp=true domain=((?!ephemeral_app).)*
++
++isSystemServer=true domain=system_server
++user=system seinfo=platform domain=system_app type=system_app_data_file
++user=bluetooth seinfo=platform domain=bluetooth type=bluetooth_data_file
++user=nfc seinfo=platform domain=nfc type=nfc_data_file
++user=radio seinfo=platform domain=radio type=radio_data_file
++user=shared_relro domain=shared_relro
++user=shell seinfo=platform domain=shell type=shell_data_file
++user=_isolated domain=isolated_app levelFrom=user
++user=_app seinfo=media domain=mediaprovider name=android.process.media type=app_data_file levelFrom=user
++user=_app seinfo=platform domain=platform_app type=app_data_file levelFrom=user
++user=_app isV2App=true isEphemeralApp=true domain=ephemeral_app type=app_data_file levelFrom=user
++user=_app isPrivApp=true domain=priv_app type=app_data_file levelFrom=user
++user=_app minTargetSdkVersion=26 domain=untrusted_app type=app_data_file levelFrom=user
++user=_app domain=untrusted_app_25 type=app_data_file levelFrom=user
+diff --git a/private/service_contexts b/private/service_contexts
+index a82243ffb..a89a40618 100644
+--- a/private/service_contexts
++++ b/private/service_contexts
+@@ -106,7 +106,6 @@ nfc                                       u:object_r:nfc_service:s0
+ notification                              u:object_r:notification_service:s0
+ oem_lock                                  u:object_r:oem_lock_service:s0
+ otadexopt                                 u:object_r:otadexopt_service:s0
+-overlay                                   u:object_r:overlay_service:s0
+ package                                   u:object_r:package_service:s0
+ package_native                            u:object_r:package_native_service:s0
+ permission                                u:object_r:permission_service:s0
+@@ -172,3 +171,6 @@ wificond                                  u:object_r:wificond_service:s0
+ wifiaware                                 u:object_r:wifiaware_service:s0
+ window                                    u:object_r:window_service:s0
+ *                                         u:object_r:default_android_service:s0
++
++# --- picasso 7.1 перенос ---
++interfacer                                u:object_r:interfacer_service:s0
+diff --git a/private/service_contexts.pre-picasso b/private/service_contexts.pre-picasso
+new file mode 100644
+index 000000000..a82243ffb
+--- /dev/null
++++ b/private/service_contexts.pre-picasso
+@@ -0,0 +1,174 @@
++accessibility                             u:object_r:accessibility_service:s0
++account                                   u:object_r:account_service:s0
++activity                                  u:object_r:activity_service:s0
++alarm                                     u:object_r:alarm_service:s0
++android.os.UpdateEngineService            u:object_r:update_engine_service:s0
++android.security.keystore                 u:object_r:keystore_service:s0
++android.service.gatekeeper.IGateKeeperService    u:object_r:gatekeeper_service:s0
++appops                                    u:object_r:appops_service:s0
++appwidget                                 u:object_r:appwidget_service:s0
++assetatlas                                u:object_r:assetatlas_service:s0
++audio                                     u:object_r:audio_service:s0
++autofill                                  u:object_r:autofill_service:s0
++backup                                    u:object_r:backup_service:s0
++batteryproperties                         u:object_r:batteryproperties_service:s0
++batterystats                              u:object_r:batterystats_service:s0
++battery                                   u:object_r:battery_service:s0
++bluetooth_manager                         u:object_r:bluetooth_manager_service:s0
++bluetooth                                 u:object_r:bluetooth_service:s0
++broadcastradio                            u:object_r:broadcastradio_service:s0
++carrier_config                            u:object_r:radio_service:s0
++clipboard                                 u:object_r:clipboard_service:s0
++com.android.net.IProxyService             u:object_r:IProxyService_service:s0
++commontime_management                     u:object_r:commontime_management_service:s0
++common_time.clock                         u:object_r:mediaserver_service:s0
++common_time.config                        u:object_r:mediaserver_service:s0
++companiondevice                           u:object_r:companion_device_service:s0
++connectivity                              u:object_r:connectivity_service:s0
++connmetrics                               u:object_r:connmetrics_service:s0
++consumer_ir                               u:object_r:consumer_ir_service:s0
++content                                   u:object_r:content_service:s0
++contexthub                                u:object_r:contexthub_service:s0
++country_detector                          u:object_r:country_detector_service:s0
++coverage                                  u:object_r:coverage_service:s0
++cpuinfo                                   u:object_r:cpuinfo_service:s0
++dbinfo                                    u:object_r:dbinfo_service:s0
++device_policy                             u:object_r:device_policy_service:s0
++device_identifiers                        u:object_r:device_identifiers_service:s0
++deviceidle                                u:object_r:deviceidle_service:s0
++devicestoragemonitor                      u:object_r:devicestoragemonitor_service:s0
++diskstats                                 u:object_r:diskstats_service:s0
++display.qservice                          u:object_r:surfaceflinger_service:s0
++display                                   u:object_r:display_service:s0
++netd_listener                             u:object_r:netd_listener_service:s0
++DockObserver                              u:object_r:DockObserver_service:s0
++dreams                                    u:object_r:dreams_service:s0
++drm.drmManager                            u:object_r:drmserver_service:s0
++dropbox                                   u:object_r:dropbox_service:s0
++dumpstate                                 u:object_r:dumpstate_service:s0
++econtroller                               u:object_r:radio_service:s0
++ethernet                                  u:object_r:ethernet_service:s0
++fingerprint                               u:object_r:fingerprint_service:s0
++font                                      u:object_r:font_service:s0
++android.hardware.fingerprint.IFingerprintDaemon u:object_r:fingerprintd_service:s0
++gfxinfo                                   u:object_r:gfxinfo_service:s0
++graphicsstats                             u:object_r:graphicsstats_service:s0
++gpu                                       u:object_r:gpu_service:s0
++hardware                                  u:object_r:hardware_service:s0
++hardware_properties                       u:object_r:hardware_properties_service:s0
++hdmi_control                              u:object_r:hdmi_control_service:s0
++incident                                  u:object_r:incident_service:s0
++inputflinger                              u:object_r:inputflinger_service:s0
++input_method                              u:object_r:input_method_service:s0
++input                                     u:object_r:input_service:s0
++installd                                  u:object_r:installd_service:s0
++iphonesubinfo_msim                        u:object_r:radio_service:s0
++iphonesubinfo2                            u:object_r:radio_service:s0
++iphonesubinfo                             u:object_r:radio_service:s0
++ims                                       u:object_r:radio_service:s0
++imms                                      u:object_r:imms_service:s0
++ipsec                                     u:object_r:ipsec_service:s0
++isms_msim                                 u:object_r:radio_service:s0
++isms2                                     u:object_r:radio_service:s0
++isms                                      u:object_r:radio_service:s0
++isub                                      u:object_r:radio_service:s0
++jobscheduler                              u:object_r:jobscheduler_service:s0
++launcherapps                              u:object_r:launcherapps_service:s0
++location                                  u:object_r:location_service:s0
++lock_settings                             u:object_r:lock_settings_service:s0
++media.aaudio                              u:object_r:audioserver_service:s0
++media.audio_flinger                       u:object_r:audioserver_service:s0
++media.audio_policy                        u:object_r:audioserver_service:s0
++media.camera                              u:object_r:cameraserver_service:s0
++media.camera.proxy                        u:object_r:cameraproxy_service:s0
++media.log                                 u:object_r:audioserver_service:s0
++media.player                              u:object_r:mediaserver_service:s0
++media.metrics                             u:object_r:mediametrics_service:s0
++media.extractor                           u:object_r:mediaextractor_service:s0
++media.codec                               u:object_r:mediacodec_service:s0
++media.resource_manager                    u:object_r:mediaserver_service:s0
++media.sound_trigger_hw                    u:object_r:audioserver_service:s0
++media.drm                                 u:object_r:mediadrmserver_service:s0
++media_projection                          u:object_r:media_projection_service:s0
++media_resource_monitor                    u:object_r:media_session_service:s0
++media_router                              u:object_r:media_router_service:s0
++media_session                             u:object_r:media_session_service:s0
++meminfo                                   u:object_r:meminfo_service:s0
++midi                                      u:object_r:midi_service:s0
++mount                                     u:object_r:mount_service:s0
++netd                                      u:object_r:netd_service:s0
++netpolicy                                 u:object_r:netpolicy_service:s0
++netstats                                  u:object_r:netstats_service:s0
++network_management                        u:object_r:network_management_service:s0
++network_score                             u:object_r:network_score_service:s0
++network_time_update_service               u:object_r:network_time_update_service:s0
++nfc                                       u:object_r:nfc_service:s0
++notification                              u:object_r:notification_service:s0
++oem_lock                                  u:object_r:oem_lock_service:s0
++otadexopt                                 u:object_r:otadexopt_service:s0
++overlay                                   u:object_r:overlay_service:s0
++package                                   u:object_r:package_service:s0
++package_native                            u:object_r:package_native_service:s0
++permission                                u:object_r:permission_service:s0
++persistent_data_block                     u:object_r:persistent_data_block_service:s0
++phone_msim                                u:object_r:radio_service:s0
++phone1                                    u:object_r:radio_service:s0
++phone2                                    u:object_r:radio_service:s0
++phone                                     u:object_r:radio_service:s0
++pinner                                    u:object_r:pinner_service:s0
++power                                     u:object_r:power_service:s0
++print                                     u:object_r:print_service:s0
++processinfo                               u:object_r:processinfo_service:s0
++procstats                                 u:object_r:procstats_service:s0
++radio.phonesubinfo                        u:object_r:radio_service:s0
++radio.phone                               u:object_r:radio_service:s0
++radio.sms                                 u:object_r:radio_service:s0
++recovery                                  u:object_r:recovery_service:s0
++restrictions                              u:object_r:restrictions_service:s0
++rttmanager                                u:object_r:rttmanager_service:s0
++samplingprofiler                          u:object_r:samplingprofiler_service:s0
++scheduling_policy                         u:object_r:scheduling_policy_service:s0
++search                                    u:object_r:search_service:s0
++sec_key_att_app_id_provider               u:object_r:sec_key_att_app_id_provider_service:s0
++sensorservice                             u:object_r:sensorservice_service:s0
++serial                                    u:object_r:serial_service:s0
++servicediscovery                          u:object_r:servicediscovery_service:s0
++settings                                  u:object_r:settings_service:s0
++shortcut                                  u:object_r:shortcut_service:s0
++simphonebook_msim                         u:object_r:radio_service:s0
++simphonebook2                             u:object_r:radio_service:s0
++simphonebook                              u:object_r:radio_service:s0
++sip                                       u:object_r:radio_service:s0
++soundtrigger                              u:object_r:voiceinteraction_service:s0
++statusbar                                 u:object_r:statusbar_service:s0
++storaged                                  u:object_r:storaged_service:s0
++storagestats                              u:object_r:storagestats_service:s0
++SurfaceFlinger                            u:object_r:surfaceflinger_service:s0
++task                                      u:object_r:task_service:s0
++telecom                                   u:object_r:telecom_service:s0
++telephony.registry                        u:object_r:registry_service:s0
++textclassification                        u:object_r:textclassification_service:s0
++textservices                              u:object_r:textservices_service:s0
++timezone                                  u:object_r:timezone_service:s0
++thermalservice                            u:object_r:thermal_service:s0
++trust                                     u:object_r:trust_service:s0
++tv_input                                  u:object_r:tv_input_service:s0
++uimode                                    u:object_r:uimode_service:s0
++updatelock                                u:object_r:updatelock_service:s0
++usagestats                                u:object_r:usagestats_service:s0
++usb                                       u:object_r:usb_service:s0
++user                                      u:object_r:user_service:s0
++vibrator                                  u:object_r:vibrator_service:s0
++virtual_touchpad                          u:object_r:virtual_touchpad_service:s0
++voiceinteraction                          u:object_r:voiceinteraction_service:s0
++vr_hwc                                    u:object_r:vr_hwc_service:s0
++vrmanager                                 u:object_r:vr_manager_service:s0
++wallpaper                                 u:object_r:wallpaper_service:s0
++webviewupdate                             u:object_r:webviewupdate_service:s0
++wifip2p                                   u:object_r:wifip2p_service:s0
++wifiscanner                               u:object_r:wifiscanner_service:s0
++wifi                                      u:object_r:wifi_service:s0
++wificond                                  u:object_r:wificond_service:s0
++wifiaware                                 u:object_r:wifiaware_service:s0
++window                                    u:object_r:window_service:s0
++*                                         u:object_r:default_android_service:s0
+diff --git a/private/untrusted_app.te b/private/untrusted_app.te
+index 93a73f143..287fb7083 100644
+--- a/private/untrusted_app.te
++++ b/private/untrusted_app.te
+@@ -35,3 +35,8 @@ create_pty(untrusted_app)
+ neverallow untrusted_app system_server:udp_socket {
+         accept append bind create getopt ioctl listen lock name_bind
+         relabelfrom relabelto setattr setopt shutdown };
++
++# --- picasso 7.1 перенос ---
++# Allow AOPT to call module_request
++allow untrusted_app kernel:system module_request;
++
+diff --git a/private/untrusted_app.te.pre-picasso b/private/untrusted_app.te.pre-picasso
+new file mode 100644
+index 000000000..93a73f143
+--- /dev/null
++++ b/private/untrusted_app.te.pre-picasso
+@@ -0,0 +1,37 @@
++###
++### Untrusted apps.
++###
++### This file defines the rules for untrusted apps.
++### Apps are labeled based on mac_permissions.xml (maps signer and
++### optionally package name to seinfo value) and seapp_contexts (maps UID
++### and optionally seinfo value to domain for process and type for data
++### directory).  The untrusted_app domain is the default assignment in
++### seapp_contexts for any app with UID between APP_AID (10000)
++### and AID_ISOLATED_START (99000) if the app has no specific seinfo
++### value as determined from mac_permissions.xml.  In current AOSP, this
++### domain is assigned to all non-system apps as well as to any system apps
++### that are not signed by the platform key.  To move
++### a system app into a specific domain, add a signer entry for it to
++### mac_permissions.xml and assign it one of the pre-existing seinfo values
++### or define and use a new seinfo value in both mac_permissions.xml and
++### seapp_contexts.
++###
++
++typeattribute untrusted_app coredomain;
++
++app_domain(untrusted_app)
++untrusted_app_domain(untrusted_app)
++net_domain(untrusted_app)
++bluetooth_domain(untrusted_app)
++
++# allow untrusted apps to use UDP sockets provided by the system server but not
++# modify them other than to connect
++allow untrusted_app system_server:udp_socket { connect getattr read recvfrom sendto write };
++
++# Allow the allocation and use of ptys
++# Used by: https://play.google.com/store/apps/details?id=jackpal.androidterm
++create_pty(untrusted_app)
++
++neverallow untrusted_app system_server:udp_socket {
++        accept append bind create getopt ioctl listen lock name_bind
++        relabelfrom relabelto setattr setopt shutdown };
+diff --git a/public/property.te b/public/property.te
+index 95efcaa78..bbe26b31d 100644
+--- a/public/property.te
++++ b/public/property.te
+@@ -40,6 +40,7 @@ type powerctl_prop, property_type, core_property_type;
+ type radio_prop, property_type, core_property_type;
+ type restorecon_prop, property_type, core_property_type;
+ type safemode_prop, property_type;
++type theme_prop, property_type;
+ type serialno_prop, property_type;
+ type shell_prop, property_type, core_property_type;
+ type system_prop, property_type, core_property_type;
+diff --git a/public/service.te b/public/service.te
+index e97b864db..166744ecd 100644
+--- a/public/service.te
++++ b/public/service.te
+@@ -79,6 +79,7 @@ type hardware_service, system_server_service, service_manager_type;
+ type hardware_properties_service, app_api_service, ephemeral_app_api_service, system_server_service, service_manager_type;
+ type hdmi_control_service, system_api_service, system_server_service, service_manager_type;
+ type input_method_service, app_api_service, ephemeral_app_api_service, system_server_service, service_manager_type;
++type interfacer_service, app_api_service, system_server_service, service_manager_type;
+ type input_service, app_api_service, ephemeral_app_api_service, system_server_service, service_manager_type;
+ type imms_service, app_api_service, ephemeral_app_api_service, system_server_service, service_manager_type;
+ type ipsec_service, app_api_service, ephemeral_app_api_service, system_server_service, service_manager_type;

@@ -1,0 +1,11 @@
+# PICASSO: periodic TRIM (see /system/bin/picasso-fstrim.sh)
+service picasso_fstrim /system/bin/sh /system/bin/picasso-fstrim.sh
+    class late_start
+    user root
+    group root
+    oneshot
+    disabled
+    ioprio idle 7
+
+on property:sys.boot_completed=1
+    start picasso_fstrim

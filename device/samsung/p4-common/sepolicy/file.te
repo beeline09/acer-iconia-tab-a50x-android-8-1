@@ -1,0 +1,18 @@
+type wifi_efs_file, file_type;
+
+type sysfs_firmware_writable, fs_type, sysfs_type;
+type sysfs_devices_tegradc, fs_type, sysfs_type;
+type sysfs_voodoo_sound, fs_type, sysfs_type;
+
+type tmpfs_mmcblk0p6, file_type;
+
+# things under /data/misc/radio
+type radio_data_misc_file, file_type;
+
+# ICS blobs (объявления перенесены из system/sepolicy/file.te 7.1)
+type ics_blob_file, file_type;
+type ics_audio_blob_file, file_type;
+type ics_camera_blob_file, file_type;
+
+# Themes
+type theme_data_file, file_type, data_file_type;

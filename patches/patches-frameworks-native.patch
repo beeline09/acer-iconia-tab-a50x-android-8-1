@@ -1,0 +1,1340 @@
+diff --git a/build/tablet-dalvik-heap.mk b/build/tablet-dalvik-heap.mk
+index f577fb86f5..39ac7ac0c6 100644
+--- a/build/tablet-dalvik-heap.mk
++++ b/build/tablet-dalvik-heap.mk
+@@ -17,9 +17,9 @@
+ # Provides overrides to configure the Dalvik heap for a standard tablet device.
+ 
+ PRODUCT_PROPERTY_OVERRIDES += \
+-    dalvik.vm.heapstartsize=5m \
+-    dalvik.vm.heapgrowthlimit=48m \
+-    dalvik.vm.heapsize=256m \
++    dalvik.vm.heapstartsize=8m \
++    dalvik.vm.heapgrowthlimit=64m \
++    dalvik.vm.heapsize=174m \
+     dalvik.vm.heaptargetutilization=0.75 \
+     dalvik.vm.heapminfree=512k \
+     dalvik.vm.heapmaxfree=2m
+diff --git a/libs/binder/Parcel.cpp b/libs/binder/Parcel.cpp
+index 89516bc11e..9d19e8fd3e 100644
+--- a/libs/binder/Parcel.cpp
++++ b/libs/binder/Parcel.cpp
+@@ -542,7 +542,11 @@ status_t Parcel::appendFrom(const Parcel *parcel, size_t offset, size_t len)
+ 
+             flat_binder_object* flat
+                 = reinterpret_cast<flat_binder_object*>(mData + off);
++#ifndef DISABLE_ASHMEM_TRACKING
+             acquire_object(proc, *flat, this, &mOpenAshmemSize);
++#else
++            acquire_object(proc, *flat, this);
++#endif
+ 
+             if (flat->type == BINDER_TYPE_FD) {
+                 // If this is a file descriptor, we need to dup it so the
+@@ -1322,7 +1326,11 @@ restart_write:
+         // Need to write meta-data?
+         if (nullMetaData || val.binder != 0) {
+             mObjects[mObjectsSize] = mDataPos;
++#ifndef DISABLE_ASHMEM_TRACKING
+             acquire_object(ProcessState::self(), val, this, &mOpenAshmemSize);
++#else
++            acquire_object(ProcessState::self(), val, this);
++#endif
+             mObjectsSize++;
+         }
+ 
+@@ -2500,7 +2508,11 @@ void Parcel::releaseObjects()
+         i--;
+         const flat_binder_object* flat
+             = reinterpret_cast<flat_binder_object*>(data+objects[i]);
++#ifndef DISABLE_ASHMEM_TRACKING
+         release_object(proc, *flat, this, &mOpenAshmemSize);
++#else
++        release_object(proc, *flat, this);
++#endif
+     }
+ }
+ 
+@@ -2514,7 +2526,11 @@ void Parcel::acquireObjects()
+         i--;
+         const flat_binder_object* flat
+             = reinterpret_cast<flat_binder_object*>(data+objects[i]);
++#ifndef DISABLE_ASHMEM_TRACKING
+         acquire_object(proc, *flat, this, &mOpenAshmemSize);
++#else
++        acquire_object(proc, *flat, this);
++#endif
+     }
+ }
+ 
+@@ -2707,7 +2723,11 @@ status_t Parcel::continueWrite(size_t desired)
+                     // will need to rescan because we may have lopped off the only FDs
+                     mFdsKnown = false;
+                 }
++#ifndef DISABLE_ASHMEM_TRACKING
+                 release_object(proc, *flat, this, &mOpenAshmemSize);
++#else
++                release_object(proc, *flat, this);
++#endif
+             }
+ 
+             if (objectsSize == 0) {
+@@ -2802,7 +2822,9 @@ void Parcel::initState()
+     mFdsKnown = true;
+     mAllowFds = true;
+     mOwner = NULL;
++#ifndef DISABLE_ASHMEM_TRACKING
+     mOpenAshmemSize = 0;
++#endif
+ 
+     // racing multiple init leads only to multiple identical write
+     if (gMaxFds == 0) {
+@@ -2837,12 +2859,20 @@ size_t Parcel::getBlobAshmemSize() const
+     // This used to return the size of all blobs that were written to ashmem, now we're returning
+     // the ashmem currently referenced by this Parcel, which should be equivalent.
+     // TODO: Remove method once ABI can be changed.
++#ifndef DISABLE_ASHMEM_TRACKING
+     return mOpenAshmemSize;
++#else
++    return 0;
++#endif
+ }
+ 
+ size_t Parcel::getOpenAshmemSize() const
+ {
++#ifndef DISABLE_ASHMEM_TRACKING
+     return mOpenAshmemSize;
++#else
++    return 0;
++#endif
+ }
+ 
+ // --- Parcel::Blob ---
+diff --git a/libs/binder/include/binder/Parcel.h b/libs/binder/include/binder/Parcel.h
+index dede78f61e..592eb636fa 100644
+--- a/libs/binder/include/binder/Parcel.h
++++ b/libs/binder/include/binder/Parcel.h
+@@ -556,8 +556,10 @@ public:
+         inline void* data() { return mData; }
+     };
+ 
++#ifndef DISABLE_ASHMEM_TRACKING
+ private:
+     size_t mOpenAshmemSize;
++#endif
+ 
+ public:
+     // TODO: Remove once ABI can be changed.
+diff --git a/libs/ui/Android.bp b/libs/ui/Android.bp
+index 59173cbf3d..7d1fab5d95 100644
+--- a/libs/ui/Android.bp
++++ b/libs/ui/Android.bp
+@@ -48,6 +48,7 @@ cc_library_shared {
+     },
+ 
+     srcs: [
++        "FramebufferNativeWindow.cpp",
+         "ColorSpace.cpp",
+         "DebugUtils.cpp",
+         "Fence.cpp",
+@@ -65,6 +66,8 @@ cc_library_shared {
+     ],
+ 
+     include_dirs: [
++        "system/core/include",
++        "frameworks/native/libs/nativewindow/include",  // picasso: system/window.h
+         "frameworks/native/include",
+     ],
+ 
+diff --git a/libs/ui/FramebufferNativeWindow.cpp b/libs/ui/FramebufferNativeWindow.cpp
+new file mode 100755
+index 0000000000..b39d96f949
+--- /dev/null
++++ b/libs/ui/FramebufferNativeWindow.cpp
+@@ -0,0 +1,372 @@
++/*
++**
++** Copyright 2007 The Android Open Source Project
++**
++** Licensed under the Apache License Version 2.0(the "License");
++** you may not use this file except in compliance with the License.
++** You may obtain a copy of the License at
++**
++**     http://www.apache.org/licenses/LICENSE-2.0
++**
++** Unless required by applicable law or agreed to in writing software
++** distributed under the License is distributed on an "AS IS" BASIS
++** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND either express or implied.
++** See the License for the specific language governing permissions and
++** limitations under the License.
++*/
++
++#define LOG_TAG "FramebufferNativeWindow"
++
++#include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
++#include <errno.h>
++
++#include <cutils/log.h>
++#include <cutils/atomic.h>
++#include <utils/threads.h>
++#include <utils/RefBase.h>
++
++#include <ui/ANativeObjectBase.h>
++#include <ui/Fence.h>
++#define INCLUDED_FROM_FRAMEBUFFER_NATIVE_WINDOW_CPP
++#include <ui/FramebufferNativeWindow.h>
++#undef INCLUDED_FROM_FRAMEBUFFER_NATIVE_WINDOW_CPP
++#include <ui/Rect.h>
++
++#include <EGL/egl.h>
++
++#include <hardware/hardware.h>
++#include <hardware/gralloc.h>
++
++// ----------------------------------------------------------------------------
++namespace android {
++// ----------------------------------------------------------------------------
++
++class NativeBuffer final
++    : public ANativeObjectBase<
++        ANativeWindowBuffer,
++        NativeBuffer,
++        LightRefBase<NativeBuffer>>
++{
++public:
++    NativeBuffer(int w, int h, int f, int u) : BASE() {
++        ANativeWindowBuffer::width  = w;
++        ANativeWindowBuffer::height = h;
++        ANativeWindowBuffer::format = f;
++        ANativeWindowBuffer::usage  = static_cast<uint64_t>(u);  // picasso: явный каст (Werror sign-conversion)
++    }
++private:
++    friend class LightRefBase<NativeBuffer>;
++};
++
++
++/*
++ * This implements the (main) framebuffer management. This class is used
++ * mostly by SurfaceFlinger, but also by command line GL application.
++ *
++ * In fact this is an implementation of ANativeWindow on top of
++ * the framebuffer.
++ *
++ * Currently it is pretty simple, it manages only two buffers (the front and
++ * back buffer).
++ *
++ */
++
++FramebufferNativeWindow::FramebufferNativeWindow()
++    : BASE(), fbDev(0), grDev(0), mUpdateOnDemand(false)
++{
++    hw_module_t const* module;
++    if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID, &module) == 0) {
++        int err;
++        int i;
++        err = framebuffer_open(module, &fbDev);
++        ALOGE_IF(err, "couldn't open framebuffer HAL (%s)", strerror(-err));
++
++        err = gralloc_open(module, &grDev);
++        ALOGE_IF(err, "couldn't open gralloc HAL (%s)", strerror(-err));
++
++        // bail out if we can't initialize the modules
++        if (!fbDev || !grDev)
++            return;
++
++        mUpdateOnDemand = (fbDev->setUpdateRect != 0);
++
++        // initialize the buffer FIFO
++        if(fbDev->numFramebuffers >= MIN_NUM_FRAME_BUFFERS &&
++           fbDev->numFramebuffers <= MAX_NUM_FRAME_BUFFERS){
++            mNumBuffers = fbDev->numFramebuffers;
++        } else {
++            mNumBuffers = MIN_NUM_FRAME_BUFFERS;
++        }
++        mNumFreeBuffers = mNumBuffers;
++        mBufferHead = mNumBuffers-1;
++
++        /*
++         * This does not actually change the framebuffer format. It merely
++         * fakes this format to surfaceflinger so that when it creates
++         * framebuffer surfaces it will use this format. It's really a giant
++         * HACK to allow interworking with buggy gralloc+GPU driver
++         * implementations. You should *NEVER* need to set this for shipping
++         * devices.
++         */
++#ifdef FRAMEBUFFER_FORCE_FORMAT
++        *((uint32_t *)&fbDev->format) = FRAMEBUFFER_FORCE_FORMAT;
++#endif
++
++        for (i = 0; i < mNumBuffers; i++) {
++            buffers[i] = new NativeBuffer(
++                    static_cast<int>(fbDev->width),
++                    static_cast<int>(fbDev->height),
++                    fbDev->format, GRALLOC_USAGE_HW_FB);
++        }
++
++        for (i = 0; i < mNumBuffers; i++) {
++            err = grDev->alloc(grDev,
++                    static_cast<int>(fbDev->width),
++                    static_cast<int>(fbDev->height),
++                    fbDev->format, GRALLOC_USAGE_HW_FB,
++                    &buffers[i]->handle, &buffers[i]->stride);
++
++            ALOGE_IF(err, "fb buffer %d allocation failed w=%d, h=%d, err=%s",
++                    i, fbDev->width, fbDev->height, strerror(-err));
++
++            if (err) {
++                mNumBuffers = i;
++                mNumFreeBuffers = i;
++                mBufferHead = mNumBuffers-1;
++                break;
++            }
++        }
++
++        const_cast<uint32_t&>(ANativeWindow::flags) = fbDev->flags;
++        const_cast<float&>(ANativeWindow::xdpi) = fbDev->xdpi;
++        const_cast<float&>(ANativeWindow::ydpi) = fbDev->ydpi;
++        const_cast<int&>(ANativeWindow::minSwapInterval) =
++            fbDev->minSwapInterval;
++        const_cast<int&>(ANativeWindow::maxSwapInterval) =
++            fbDev->maxSwapInterval;
++    } else {
++        ALOGE("Couldn't get gralloc module");
++    }
++
++    ANativeWindow::setSwapInterval = setSwapInterval;
++    ANativeWindow::dequeueBuffer = dequeueBuffer;
++    ANativeWindow::queueBuffer = queueBuffer;
++    ANativeWindow::query = query;
++    ANativeWindow::perform = perform;
++
++    ANativeWindow::dequeueBuffer_DEPRECATED = dequeueBuffer_DEPRECATED;
++    ANativeWindow::lockBuffer_DEPRECATED = lockBuffer_DEPRECATED;
++    ANativeWindow::queueBuffer_DEPRECATED = queueBuffer_DEPRECATED;
++}
++
++FramebufferNativeWindow::~FramebufferNativeWindow()
++{
++    if (grDev) {
++        for(int i = 0; i < mNumBuffers; i++) {
++            if (buffers[i] != NULL) {
++                grDev->free(grDev, buffers[i]->handle);
++            }
++        }
++        gralloc_close(grDev);
++    }
++
++    if (fbDev) {
++        framebuffer_close(fbDev);
++    }
++}
++
++status_t FramebufferNativeWindow::setUpdateRectangle(const Rect& r)
++{
++    if (!mUpdateOnDemand) {
++        return INVALID_OPERATION;
++    }
++    return fbDev->setUpdateRect(fbDev, r.left, r.top, r.width(), r.height());
++}
++
++status_t FramebufferNativeWindow::compositionComplete()
++{
++    if (fbDev->compositionComplete) {
++        return fbDev->compositionComplete(fbDev);
++    }
++    return INVALID_OPERATION;
++}
++
++int FramebufferNativeWindow::setSwapInterval(
++        ANativeWindow* window, int interval)
++{
++    framebuffer_device_t* fb = getSelf(window)->fbDev;
++    return fb->setSwapInterval(fb, interval);
++}
++
++void FramebufferNativeWindow::dump(String8& result) {
++    if (fbDev->common.version >= 1 && fbDev->dump) {
++        const size_t SIZE = 4096;
++        char buffer[SIZE];
++
++        fbDev->dump(fbDev, buffer, SIZE);
++        result.append(buffer);
++    }
++}
++
++// only for debugging / logging
++int FramebufferNativeWindow::getCurrentBufferIndex() const
++{
++    Mutex::Autolock _l(mutex);
++    const int index = mCurrentBufferIndex;
++    return index;
++}
++
++int FramebufferNativeWindow::dequeueBuffer_DEPRECATED(ANativeWindow* window,
++        ANativeWindowBuffer** buffer)
++{
++    int fenceFd = -1;
++    int result = dequeueBuffer(window, buffer, &fenceFd);
++    sp<Fence> fence(new Fence(fenceFd));
++    int waitResult = fence->wait(Fence::TIMEOUT_NEVER);
++    if (waitResult != OK) {
++        ALOGE("dequeueBuffer_DEPRECATED: Fence::wait returned an "
++                "error: %d", waitResult);
++        return waitResult;
++    }
++    return result;
++}
++
++int FramebufferNativeWindow::dequeueBuffer(ANativeWindow* window,
++        ANativeWindowBuffer** buffer, int* fenceFd)
++{
++    FramebufferNativeWindow* self = getSelf(window);
++    Mutex::Autolock _l(self->mutex);
++
++    int index = self->mBufferHead++;
++    if (self->mBufferHead >= self->mNumBuffers)
++        self->mBufferHead = 0;
++
++    // wait for a free non-front buffer
++    while (self->mNumFreeBuffers < 2) {
++        self->mCondition.wait(self->mutex);
++    }
++    ALOG_ASSERT(self->buffers[index] != self->front, "");
++
++    // get this buffer
++    self->mNumFreeBuffers--;
++    self->mCurrentBufferIndex = index;
++
++    *buffer = self->buffers[index].get();
++    *fenceFd = -1;
++
++    return 0;
++}
++
++int FramebufferNativeWindow::lockBuffer_DEPRECATED(ANativeWindow* /*window*/,
++        ANativeWindowBuffer* /*buffer*/)
++{
++    return NO_ERROR;
++}
++
++int FramebufferNativeWindow::queueBuffer_DEPRECATED(ANativeWindow* window,
++        ANativeWindowBuffer* buffer)
++{
++    return queueBuffer(window, buffer, -1);
++}
++
++int FramebufferNativeWindow::queueBuffer(ANativeWindow* window,
++        ANativeWindowBuffer* buffer, int fenceFd)
++{
++    FramebufferNativeWindow* self = getSelf(window);
++    Mutex::Autolock _l(self->mutex);
++    framebuffer_device_t* fb = self->fbDev;
++    buffer_handle_t handle = static_cast<NativeBuffer*>(buffer)->handle;
++
++    sp<Fence> fence(new Fence(fenceFd));
++    fence->wait(Fence::TIMEOUT_NEVER);
++
++    int res = fb->post(fb, handle);
++    self->front = static_cast<NativeBuffer*>(buffer);
++    self->mNumFreeBuffers++;
++    self->mCondition.broadcast();
++    return res;
++}
++
++int FramebufferNativeWindow::query(const ANativeWindow* window,
++        int what, int* value)
++{
++    const FramebufferNativeWindow* self = getSelf(window);
++    Mutex::Autolock _l(self->mutex);
++    framebuffer_device_t* fb = self->fbDev;
++    switch (what) {
++        case NATIVE_WINDOW_WIDTH:
++            *value = static_cast<int>(fb->width);
++            return NO_ERROR;
++        case NATIVE_WINDOW_HEIGHT:
++            *value = static_cast<int>(fb->height);
++            return NO_ERROR;
++        case NATIVE_WINDOW_FORMAT:
++            *value = fb->format;
++            return NO_ERROR;
++        case NATIVE_WINDOW_CONCRETE_TYPE:
++            *value = NATIVE_WINDOW_FRAMEBUFFER;
++            return NO_ERROR;
++        case NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER:
++            *value = 0;
++            return NO_ERROR;
++        case NATIVE_WINDOW_DEFAULT_WIDTH:
++            *value = static_cast<int>(fb->width);
++            return NO_ERROR;
++        case NATIVE_WINDOW_DEFAULT_HEIGHT:
++            *value = static_cast<int>(fb->height);
++            return NO_ERROR;
++        case NATIVE_WINDOW_TRANSFORM_HINT:
++            *value = 0;
++            return NO_ERROR;
++    }
++    *value = 0;
++    return BAD_VALUE;
++}
++
++int FramebufferNativeWindow::perform(ANativeWindow* /*window*/,
++        int operation, ...)
++{
++    switch (operation) {
++        case NATIVE_WINDOW_CONNECT:
++        case NATIVE_WINDOW_DISCONNECT:
++        case NATIVE_WINDOW_SET_USAGE:
++        case NATIVE_WINDOW_SET_BUFFERS_GEOMETRY:
++        case NATIVE_WINDOW_SET_BUFFERS_DIMENSIONS:
++        case NATIVE_WINDOW_SET_BUFFERS_FORMAT:
++        case NATIVE_WINDOW_SET_BUFFERS_TRANSFORM:
++        case NATIVE_WINDOW_API_CONNECT:
++        case NATIVE_WINDOW_API_DISCONNECT:
++            // TODO: we should implement these
++            return NO_ERROR;
++
++        case NATIVE_WINDOW_LOCK:
++        case NATIVE_WINDOW_UNLOCK_AND_POST:
++        case NATIVE_WINDOW_SET_CROP:
++        case NATIVE_WINDOW_SET_BUFFER_COUNT:
++        case NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP:
++        case NATIVE_WINDOW_SET_SCALING_MODE:
++            return INVALID_OPERATION;
++    }
++    return NAME_NOT_FOUND;
++}
++
++// ----------------------------------------------------------------------------
++}; // namespace android
++// ----------------------------------------------------------------------------
++
++using android::sp;
++using android::FramebufferNativeWindow;
++
++EGLNativeWindowType android_createDisplaySurface(void)
++{
++    FramebufferNativeWindow* w;
++    w = new FramebufferNativeWindow();
++    if (w->getDevice() == NULL) {
++        // get a ref so it can be destroyed when we exit this block
++        sp<FramebufferNativeWindow> ref(w);
++        return NULL;
++    }
++    return static_cast<EGLNativeWindowType>(w);
++}
+diff --git a/libs/ui/include/ui/FramebufferNativeWindow.h b/libs/ui/include/ui/FramebufferNativeWindow.h
+new file mode 100755
+index 0000000000..d306fe2430
+--- /dev/null
++++ b/libs/ui/include/ui/FramebufferNativeWindow.h
+@@ -0,0 +1,104 @@
++/*
++ * Copyright (C) 2007 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#ifndef INCLUDED_FROM_FRAMEBUFFER_NATIVE_WINDOW_CPP
++//#warning "FramebufferNativeWindow is deprecated"
++#endif
++
++#ifndef ANDROID_FRAMEBUFFER_NATIVE_WINDOW_H
++#define ANDROID_FRAMEBUFFER_NATIVE_WINDOW_H
++
++#include <stdint.h>
++#include <sys/types.h>
++
++#include <EGL/egl.h>
++
++#include <utils/threads.h>
++#include <utils/String8.h>
++
++#include <system/window.h>  // 8.1: frameworks/native/libs/nativewindow/include
++#include <hardware/gralloc.h>  // picasso: framebuffer_device_t
++#include <ui/ANativeObjectBase.h>
++#include <ui/Rect.h>
++
++#define MIN_NUM_FRAME_BUFFERS  2
++#define MAX_NUM_FRAME_BUFFERS  3
++
++extern "C" EGLNativeWindowType android_createDisplaySurface(void);
++
++// ---------------------------------------------------------------------------
++namespace android {
++// ---------------------------------------------------------------------------
++
++class Surface;
++class NativeBuffer;
++
++// ---------------------------------------------------------------------------
++
++class FramebufferNativeWindow 
++    : public ANativeObjectBase<
++        ANativeWindow, 
++        FramebufferNativeWindow, 
++        LightRefBase<FramebufferNativeWindow> >
++{
++public:
++    FramebufferNativeWindow(); 
++
++    framebuffer_device_t const * getDevice() const { return fbDev; } 
++
++    bool isUpdateOnDemand() const { return mUpdateOnDemand; }
++    status_t setUpdateRectangle(const Rect& updateRect);
++    status_t compositionComplete();
++
++    void dump(String8& result);
++
++    // for debugging only
++    int getCurrentBufferIndex() const;
++
++private:
++    friend class LightRefBase<FramebufferNativeWindow>;    
++    ~FramebufferNativeWindow(); // this class cannot be overloaded
++    static int setSwapInterval(ANativeWindow* window, int interval);
++    static int dequeueBuffer(ANativeWindow* window, ANativeWindowBuffer** buffer, int* fenceFd);
++    static int queueBuffer(ANativeWindow* window, ANativeWindowBuffer* buffer, int fenceFd);
++    static int query(const ANativeWindow* window, int what, int* value);
++    static int perform(ANativeWindow* window, int operation, ...);
++
++    static int dequeueBuffer_DEPRECATED(ANativeWindow* window, ANativeWindowBuffer** buffer);
++    static int queueBuffer_DEPRECATED(ANativeWindow* window, ANativeWindowBuffer* buffer);
++    static int lockBuffer_DEPRECATED(ANativeWindow* window, ANativeWindowBuffer* buffer);
++
++    framebuffer_device_t* fbDev;
++    alloc_device_t* grDev;
++
++    sp<NativeBuffer> buffers[MAX_NUM_FRAME_BUFFERS];
++    sp<NativeBuffer> front;
++    
++    mutable Mutex mutex;
++    Condition mCondition;
++    int32_t mNumBuffers;
++    int32_t mNumFreeBuffers;
++    int32_t mBufferHead;
++    int32_t mCurrentBufferIndex;
++    bool mUpdateOnDemand;
++};
++    
++// ---------------------------------------------------------------------------
++}; // namespace android
++// ---------------------------------------------------------------------------
++
++#endif // ANDROID_FRAMEBUFFER_NATIVE_WINDOW_H
++
+diff --git a/opengl/libs/Android.bp b/opengl/libs/Android.bp
+index 802b3b46e0..c7698e4e74 100644
+--- a/opengl/libs/Android.bp
++++ b/opengl/libs/Android.bp
+@@ -24,6 +24,7 @@ cc_library {
+ // The headers modules are in frameworks/native/opengl/Android.bp.
+ ndk_library {
+     name: "libEGL",
++
+     symbol_file: "libEGL.map.txt",
+     first_version: "9",
+     unversioned_until: "current",
+@@ -116,6 +117,7 @@ cc_library_static {
+ cc_library_shared {
+     name: "libEGL",
+     defaults: ["egl_libs_defaults"],
++    cflags: ["-DWORKAROUND_BUG_10194508=1"],
+     srcs: [
+         "EGL/egl_tls.cpp",
+         "EGL/egl_cache.cpp",
+diff --git a/opengl/libs/Android.bp.pre-fix b/opengl/libs/Android.bp.pre-fix
+new file mode 100644
+index 0000000000..845ac3afb9
+--- /dev/null
++++ b/opengl/libs/Android.bp.pre-fix
+@@ -0,0 +1,195 @@
++// Build the ETC1 library
++cc_library {
++    name: "libETC1",
++    srcs: ["ETC1/etc1.cpp"],
++    host_supported: true,
++
++    target: {
++        android: {
++            static: {
++                enabled: false,
++            },
++        },
++        host: {
++            shared: {
++                enabled: false,
++            },
++        },
++        windows: {
++            enabled: true,
++        },
++    },
++}
++
++// The headers modules are in frameworks/native/opengl/Android.bp.
++ndk_library {
++    name: "libEGL",
++
++    cflags: ["-DWORKAROUND_BUG_10194508=1"],
++    symbol_file: "libEGL.map.txt",
++    first_version: "9",
++    unversioned_until: "current",
++}
++
++ndk_library {
++    name: "libGLESv1_CM",
++    symbol_file: "libGLESv1_CM.map.txt",
++    first_version: "9",
++    unversioned_until: "current",
++}
++
++ndk_library {
++    name: "libGLESv2",
++    symbol_file: "libGLESv2.map.txt",
++    first_version: "9",
++    unversioned_until: "current",
++}
++
++ndk_library {
++    name: "libGLESv3",
++    symbol_file: "libGLESv3.map.txt",
++    first_version: "18",
++    unversioned_until: "current",
++}
++
++cc_defaults {
++    name: "gl_libs_defaults",
++    cflags: [
++        "-DGL_GLEXT_PROTOTYPES",
++        "-DEGL_EGLEXT_PROTOTYPES",
++        "-fvisibility=hidden",
++    ],
++    shared_libs: [
++        // ***** DO NOT ADD NEW DEPENDENCIES HERE *****
++        // In particular, DO NOT add libutils or anything "above" libcutils
++        "libcutils",
++        "liblog",
++        "libdl",
++    ],
++    static_libs: [
++        "libarect",
++    ],
++    header_libs: [
++        "gl_headers",
++        "libsystem_headers",
++        "libhardware_headers",
++        "libnativebase_headers",
++    ],
++    export_header_lib_headers: ["gl_headers"],
++
++    // we need to access the private Bionic header <bionic_tls.h>
++    include_dirs: ["bionic/libc/private"],
++}
++
++//##############################################################################
++// Build META EGL library
++//
++cc_defaults {
++    name: "egl_libs_defaults",
++    defaults: ["gl_libs_defaults"],
++    cflags: [
++        "-DLOG_TAG=\"libEGL\"",
++    ],
++    shared_libs: [
++        // ***** DO NOT ADD NEW DEPENDENCIES HERE *****
++        // In particular, DO NOT add libutils nor anything "above" libui
++        "libgraphicsenv",
++        "libnativewindow",
++        "libbacktrace",
++    ],
++    target: {
++        vendor: {
++            exclude_shared_libs: ["libgraphicsenv"],
++        },
++    },
++}
++
++cc_library_static {
++    name: "libEGL_getProcAddress",
++    defaults: ["egl_libs_defaults"],
++    srcs: ["EGL/getProcAddress.cpp"],
++    arch: {
++        arm: {
++            instruction_set: "arm",
++        },
++    },
++}
++
++cc_library_shared {
++    name: "libEGL",
++    defaults: ["egl_libs_defaults"],
++    srcs: [
++        "EGL/egl_tls.cpp",
++        "EGL/egl_cache.cpp",
++        "EGL/egl_display.cpp",
++        "EGL/egl_object.cpp",
++        "EGL/egl.cpp",
++        "EGL/eglApi.cpp",
++        "EGL/Loader.cpp",
++        "EGL/BlobCache.cpp",
++    ],
++    shared_libs: [
++        "libvndksupport",
++        "android.hardware.configstore@1.0",
++        "android.hardware.configstore-utils",
++        "libhidlbase",
++        "libhidltransport",
++        "libutils",
++    ],
++    static_libs: ["libEGL_getProcAddress"],
++    ldflags: ["-Wl,--exclude-libs=ALL"],
++    export_include_dirs: ["EGL/include"],
++}
++
++cc_test {
++    name: "libEGL_test",
++    defaults: ["egl_libs_defaults"],
++    srcs: [
++        "EGL/BlobCache.cpp",
++        "EGL/BlobCache_test.cpp",
++    ],
++}
++
++cc_defaults {
++    name: "gles_libs_defaults",
++    defaults: ["gl_libs_defaults"],
++    arch: {
++        arm: {
++            instruction_set: "arm",
++
++            // TODO: This is to work around b/20093774. Remove after root cause is fixed
++            ldflags: ["-Wl,--hash-style,both"],
++        },
++    },
++    shared_libs: ["libEGL"],
++}
++
++//##############################################################################
++// Build the wrapper OpenGL ES 1.x library
++//
++cc_library_shared {
++    name: "libGLESv1_CM",
++    defaults: ["gles_libs_defaults"],
++    srcs: ["GLES_CM/gl.cpp"],
++    cflags: ["-DLOG_TAG=\"libGLESv1\""],
++}
++
++//##############################################################################
++// Build the wrapper OpenGL ES 2.x library
++//
++cc_library_shared {
++    name: "libGLESv2",
++    defaults: ["gles_libs_defaults"],
++    srcs: ["GLES2/gl2.cpp"],
++    cflags: ["-DLOG_TAG=\"libGLESv2\""],
++}
++
++//##############################################################################
++// Build the wrapper OpenGL ES 3.x library (this is just different name for v2)
++//
++cc_library_shared {
++    name: "libGLESv3",
++    defaults: ["gles_libs_defaults"],
++    srcs: ["GLES2/gl2.cpp"],
++    cflags: ["-DLOG_TAG=\"libGLESv3\""],
++}
+diff --git a/opengl/libs/EGL/eglApi.cpp b/opengl/libs/EGL/eglApi.cpp
+index 94dfe6a9de..4f13c77436 100644
+--- a/opengl/libs/EGL/eglApi.cpp
++++ b/opengl/libs/EGL/eglApi.cpp
+@@ -614,6 +614,15 @@ void getNativePixelFormat(EGLDisplay dpy, egl_connection_t* cnx, EGLConfig confi
+ 
+     EGLint componentType = EGL_COLOR_COMPONENT_TYPE_FIXED_EXT;
+     cnx->egl.eglGetConfigAttrib(dpy, config, EGL_COLOR_COMPONENT_TYPE_EXT, &componentType);
++#if WORKAROUND_BUG_10194508
++    // picasso (tegra): старый драйвер сам сообщает корректный формат
++    if (!cnx->egl.eglGetConfigAttrib(dpy, config, EGL_NATIVE_VISUAL_ID, &format)) {
++        ALOGE("eglGetConfigAttrib(EGL_NATIVE_VISUAL_ID) failed: %#x", eglGetError());
++        format = 0;
++    }
++    return;
++#endif
++
+ 
+     EGLint a = 0;
+     EGLint r, g, b;
+diff --git a/services/surfaceflinger/DisplayDevice.cpp b/services/surfaceflinger/DisplayDevice.cpp
+index b28c9ba4cc..cdc0447344 100644
+--- a/services/surfaceflinger/DisplayDevice.cpp
++++ b/services/surfaceflinger/DisplayDevice.cpp
+@@ -29,6 +29,9 @@
+ #include <utils/Log.h>
+ 
+ #include <ui/DisplayInfo.h>
++#ifdef EGL_NEEDS_FNW
++#include <ui/FramebufferNativeWindow.h>
++#endif
+ #include <ui/PixelFormat.h>
+ 
+ #include <gui/Surface.h>
+@@ -118,7 +121,11 @@ DisplayDevice::DisplayDevice(
+     // clang-format on
+     Surface* surface;
+     mNativeWindow = surface = new Surface(producer, false);
++#ifndef EGL_NEEDS_FNW
+     ANativeWindow* const window = mNativeWindow.get();
++#else
++    ANativeWindow* const window = new FramebufferNativeWindow();
++#endif
+ 
+ #ifdef USE_HWC2
+     mActiveColorMode = HAL_COLOR_MODE_NATIVE;
+@@ -483,6 +490,20 @@ status_t DisplayDevice::orientationToTransfrom(
+         int orientation, int w, int h, Transform* tr)
+ {
+     uint32_t flags = 0;
++    char value[PROPERTY_VALUE_MAX];
++    property_get("ro.sf.hwrotation", value, "0");
++    int additionalRot = atoi(value);
++
++    if (additionalRot && mType == DISPLAY_PRIMARY) {
++        additionalRot /= 90;
++        if (orientation == DisplayState::eOrientationUnchanged) {
++            orientation = additionalRot;
++        } else {
++            orientation += additionalRot;
++            orientation %= 4;
++        }
++    }
++
+     switch (orientation) {
+     case DisplayState::eOrientationDefault:
+         flags = Transform::ROT_0;
+@@ -538,7 +559,15 @@ void DisplayDevice::setProjection(int orientation,
+     if (!frame.isValid()) {
+         // the destination frame can be invalid if it has never been set,
+         // in that case we assume the whole display frame.
+-        frame = Rect(w, h);
++        char value[PROPERTY_VALUE_MAX];
++        property_get("ro.sf.hwrotation", value, "0");
++        int additionalRot = atoi(value);
++
++        if (additionalRot == 90 || additionalRot == 270) {
++            frame = Rect(h, w);
++        } else {
++            frame = Rect(w, h);
++        }
+     }
+ 
+     if (viewport.isEmpty()) {
+diff --git a/services/surfaceflinger/DisplayDevice.h b/services/surfaceflinger/DisplayDevice.h
+index 8636e2af79..9cb8b911d5 100644
+--- a/services/surfaceflinger/DisplayDevice.h
++++ b/services/surfaceflinger/DisplayDevice.h
+@@ -245,7 +245,7 @@ private:
+     /*
+      * Transaction state
+      */
+-    static status_t orientationToTransfrom(int orientation,
++    status_t orientationToTransfrom(int orientation,
+             int w, int h, Transform* tr);
+ 
+     // The identifier of the active layer stack for this display. Several displays
+diff --git a/services/surfaceflinger/DisplayHardware/HWComposer_hwc1.cpp b/services/surfaceflinger/DisplayHardware/HWComposer_hwc1.cpp
+index dcb29135b9..7878834cd1 100644
+--- a/services/surfaceflinger/DisplayHardware/HWComposer_hwc1.cpp
++++ b/services/surfaceflinger/DisplayHardware/HWComposer_hwc1.cpp
+@@ -148,8 +148,8 @@ HWComposer::HWComposer(
+             mHwc->registerProcs(mHwc, &mCBContext->procs);
+         }
+ 
+-        // don't need a vsync thread if we have a hardware composer
+-        needVSyncThread = false;
++        // PICASSO: always create vsync thread (tegra HWC v0 vsync unreliable on 7.1)
++        needVSyncThread = true;
+         // always turn vsync off when we start
+         eventControl(HWC_DISPLAY_PRIMARY, HWC_EVENT_VSYNC, 0);
+ 
+@@ -189,8 +189,10 @@ HWComposer::HWComposer(
+     }
+ 
+     if (needVSyncThread) {
+-        // we don't have VSYNC support, we need to fake it
+         mVSyncThread = new VSyncThread(*this);
++        // PICASSO: запускаем и включаем сразу; setEnabled(true) нельзя отключить
++        mVSyncThread->run("VSYNC thread", PRIORITY_URGENT_DISPLAY + PRIORITY_MORE_FAVORABLE);
++        mVSyncThread->setEnabled(true);
+     }
+ }
+ 
+@@ -1279,9 +1281,11 @@ HWComposer::VSyncThread::VSyncThread(HWComposer& hwc)
+ }
+ 
+ void HWComposer::VSyncThread::setEnabled(bool enabled) {
++    ALOGW("PICASSO_ALIVE setEnabled called enabled=%d", enabled);
+     Mutex::Autolock _l(mLock);
+-    if (mEnabled != enabled) {
+-        mEnabled = enabled;
++    // PICASSO: never allow disabling the vsync thread
++    if (enabled && !mEnabled) {
++        mEnabled = true;
+         mCondition.signal();
+     }
+ }
+diff --git a/services/surfaceflinger/Layer.cpp b/services/surfaceflinger/Layer.cpp
+index 038ece2e05..78ea200c04 100755
+--- a/services/surfaceflinger/Layer.cpp
++++ b/services/surfaceflinger/Layer.cpp
+@@ -336,9 +336,16 @@ const String8& Layer::getName() const {
+ status_t Layer::setBuffers( uint32_t w, uint32_t h,
+                             PixelFormat format, uint32_t flags)
+ {
+-    uint32_t const maxSurfaceDims = min(
++    uint32_t maxSurfaceDims = min(
+             mFlinger->getMaxTextureSize(), mFlinger->getMaxViewportDims());
+ 
++    // PICASSO-FIX: tegra ICS blob returns 0 for GL_MAX_TEXTURE_SIZE on 7.1,
++    // causing ALL surface creation to fail with "dimensions too large"
++    if (maxSurfaceDims < 2048) {
++        ALOGW("PICASSO: GL max dims too small (%u), forcing 2048", maxSurfaceDims);
++        maxSurfaceDims = 2048;
++    }
++
+     // never allow a surface larger than what our underlying GL implementation
+     // can handle.
+     if ((uint32_t(w)>maxSurfaceDims) || (uint32_t(h)>maxSurfaceDims)) {
+diff --git a/services/surfaceflinger/SurfaceFlinger.cpp b/services/surfaceflinger/SurfaceFlinger.cpp
+index 4055693e45..33abd807f9 100644
+--- a/services/surfaceflinger/SurfaceFlinger.cpp
++++ b/services/surfaceflinger/SurfaceFlinger.cpp
+@@ -30,6 +30,7 @@
+ 
+ #include <EGL/egl.h>
+ 
++#include <bfqio/bfqio.h>
+ #include <cutils/properties.h>
+ #include <log/log.h>
+ 
+@@ -243,6 +244,9 @@ SurfaceFlinger::SurfaceFlinger()
+     mLayerTripleBufferingDisabled = atoi(value);
+     ALOGI_IF(mLayerTripleBufferingDisabled, "Disabling Triple Buffering");
+ 
++    int32_t hwrotation = property_get_int32("ro.sf.hwrotation", 0);
++    mHwOrientation = hwrotation / 90;
++
+     // We should be reading 'persist.sys.sf.color_saturation' here
+     // but since /data may be encrypted, we need to wait until after vold
+     // comes online to attempt to read the property. The property is
+@@ -628,6 +632,7 @@ void SurfaceFlinger::init() {
+ 
+     mEventControlThread = new EventControlThread(this);
+     mEventControlThread->run("EventControl", PRIORITY_URGENT_DISPLAY);
++    android_set_rt_ioprio(mEventControlThread->getTid(), 1);
+ 
+     // initialize our drawing state
+     mDrawingState = mCurrentState;
+@@ -818,6 +823,11 @@ status_t SurfaceFlinger::getDisplayConfigs(const sp<IBinder>& display,
+         // All non-virtual displays are currently considered secure.
+         info.secure = true;
+ 
++        if (DisplayDevice::DISPLAY_PRIMARY == type &&
++            mHwOrientation & DisplayState::eOrientationSwapMask) {
++            std::swap(info.w, info.h);
++        }
++
+         configs->push_back(info);
+     }
+ 
+@@ -4153,11 +4163,16 @@ void SurfaceFlinger::repaintEverything() {
+ // if they are set to 0
+ static status_t updateDimensionsLocked(const sp<const DisplayDevice>& displayDevice,
+                                        Transform::orientation_flags rotation,
+-                                       uint32_t* requestedWidth, uint32_t* requestedHeight) {
++                                       uint32_t* requestedWidth, uint32_t* requestedHeight,
++                                       int hwOrientation) {
+     // get screen geometry
+     uint32_t displayWidth = displayDevice->getWidth();
+     uint32_t displayHeight = displayDevice->getHeight();
+ 
++    if (hwOrientation & DisplayState::eOrientationSwapMask) {
++        std::swap(displayWidth, displayHeight);
++    }
++
+     if (rotation & Transform::ROT_90) {
+         std::swap(displayWidth, displayHeight);
+     }
+@@ -4267,7 +4282,7 @@ status_t SurfaceFlinger::captureScreen(const sp<IBinder>& display,
+     { // Autolock scope
+         Mutex::Autolock lock(mStateLock);
+         sp<const DisplayDevice> displayDevice(getDisplayDeviceLocked(display));
+-        updateDimensionsLocked(displayDevice, rotationFlags, &reqWidth, &reqHeight);
++        updateDimensionsLocked(displayDevice, rotationFlags, &reqWidth, &reqHeight, mHwOrientation);
+     }
+ 
+     // create a surface (because we're a producer, and we need to
+@@ -4369,14 +4384,37 @@ void SurfaceFlinger::renderScreenImplLocked(
+     // get screen geometry
+     const int32_t hw_w = hw->getWidth();
+     const int32_t hw_h = hw->getHeight();
+-    const bool filtering = static_cast<int32_t>(reqWidth) != hw_w ||
+-                           static_cast<int32_t>(reqHeight) != hw_h;
++    bool filtering = false;
++    if (mHwOrientation & DisplayState::eOrientationSwapMask) {
++        filtering = static_cast<int32_t>(reqWidth) != hw_h ||
++                static_cast<int32_t>(reqHeight) != hw_w;
++    } else {
++        filtering = static_cast<int32_t>(reqWidth) != hw_w ||
++                static_cast<int32_t>(reqHeight) != hw_h;
++    }
+ 
+     // if a default or invalid sourceCrop is passed in, set reasonable values
+     if (sourceCrop.width() == 0 || sourceCrop.height() == 0 ||
+             !sourceCrop.isValid()) {
+         sourceCrop.setLeftTop(Point(0, 0));
+         sourceCrop.setRightBottom(Point(hw_w, hw_h));
++    } else if (hw->getDisplayType() == DisplayDevice::DISPLAY_PRIMARY &&
++            mHwOrientation != DisplayState::eOrientationDefault) {
++        Transform tr;
++        uint32_t flags = 0x00;
++        switch (mHwOrientation) {
++            case DisplayState::eOrientation90:
++                flags = Transform::ROT_90;
++                break;
++            case DisplayState::eOrientation180:
++                flags = Transform::ROT_180;
++                break;
++            case DisplayState::eOrientation270:
++                flags = Transform::ROT_270;
++                break;
++        }
++        tr.set(flags, hw->getWidth(), hw->getHeight());
++        sourceCrop = tr.transform(sourceCrop);
+     }
+ 
+     // ensure that sourceCrop is inside screen
+@@ -4401,6 +4439,37 @@ void SurfaceFlinger::renderScreenImplLocked(
+     // make sure to clear all GL error flags
+     engine.checkErrors();
+ 
++    if (hw->getDisplayType() == DisplayDevice::DISPLAY_PRIMARY &&
++        mHwOrientation != DisplayState::eOrientationDefault) {
++        // convert hw orientation into flag presentation
++        // here inverse transform needed
++        uint8_t hw_rot_90  = 0x00;
++        uint8_t hw_flip_hv = 0x00;
++        switch (mHwOrientation) {
++            case DisplayState::eOrientation90:
++                hw_rot_90 = Transform::ROT_90;
++                hw_flip_hv = Transform::ROT_180;
++                break;
++            case DisplayState::eOrientation180:
++                hw_flip_hv = Transform::ROT_180;
++                break;
++            case DisplayState::eOrientation270:
++                hw_rot_90  = Transform::ROT_90;
++                break;
++        }
++
++        // transform flags operation
++        // 1) flip H V if both have ROT_90 flag
++        // 2) XOR these flags
++        uint8_t rotation_rot_90  = rotation & Transform::ROT_90;
++        uint8_t rotation_flip_hv = rotation & Transform::ROT_180;
++        if (rotation_rot_90 & hw_rot_90) {
++            rotation_flip_hv = (~rotation_flip_hv) & Transform::ROT_180;
++        }
++        rotation = static_cast<Transform::orientation_flags>
++                   ((rotation_rot_90 ^ hw_rot_90) | (rotation_flip_hv ^ hw_flip_hv));
++    }
++
+     // set-up our viewport
+     engine.setViewportAndProjection(
+         reqWidth, reqHeight, sourceCrop, hw_h, yswap, rotation);
+diff --git a/services/surfaceflinger/SurfaceFlinger.h b/services/surfaceflinger/SurfaceFlinger.h
+index 99d4a1a636..202e91136b 100644
+--- a/services/surfaceflinger/SurfaceFlinger.h
++++ b/services/surfaceflinger/SurfaceFlinger.h
+@@ -818,6 +818,12 @@ private:
+ 
+     float mSaturation = 1.0f;
+     bool mForceNativeColorMode = false;
++
++public:
++    int getHwOrientation() { return mHwOrientation; }
++private:
++    // for phyical panel orientation info
++    int mHwOrientation;
+ };
+ }; // namespace android
+ 
+diff --git a/services/surfaceflinger/SurfaceFlinger_hwc1.cpp b/services/surfaceflinger/SurfaceFlinger_hwc1.cpp
+index b28fe68224..3d7ca7c30b 100644
+--- a/services/surfaceflinger/SurfaceFlinger_hwc1.cpp
++++ b/services/surfaceflinger/SurfaceFlinger_hwc1.cpp
+@@ -178,6 +178,8 @@ SurfaceFlinger::SurfaceFlinger()
+     maxFrameBufferAcquiredBuffers = getInt64< ISurfaceFlingerConfigs,
+             &ISurfaceFlingerConfigs::maxFrameBufferAcquiredBuffers>(2);
+ 
++    mPrimaryDispSync.init(hasSyncFramework, dispSyncPresentTimeOffset);
++
+     char value[PROPERTY_VALUE_MAX];
+ 
+     property_get("ro.bq.gpu_to_cpu_unsupported", value, "0");
+@@ -204,6 +206,9 @@ SurfaceFlinger::SurfaceFlinger()
+     property_get("ro.sf.disable_triple_buffer", value, "1");
+     mLayerTripleBufferingDisabled = atoi(value);
+     ALOGI_IF(mLayerTripleBufferingDisabled, "Disabling Triple Buffering");
++
++    int32_t hwrotation = property_get_int32("ro.sf.hwrotation", 0);
++    mHwOrientation = hwrotation / 90;
+ }
+ 
+ void SurfaceFlinger::onFirstRef()
+@@ -585,6 +590,7 @@ void SurfaceFlinger::init() {
+ 
+     mEventControlThread = new EventControlThread(this);
+     mEventControlThread->run("EventControl", PRIORITY_URGENT_DISPLAY);
++    
+ 
+     // set a fake vsync period if there is no HWComposer
+     if (mHwc->initCheck() != NO_ERROR) {
+@@ -723,10 +729,22 @@ status_t SurfaceFlinger::getDisplayConfigs(const sp<IBinder>& display,
+             info.orientation = 0;
+         }
+ 
+-        info.w = hwConfig.width;
+-        info.h = hwConfig.height;
+-        info.xdpi = xdpi;
+-        info.ydpi = ydpi;
++        // picasso: аппаратный поворот экрана (ro.sf.hwrotation 90/270) — swap w/h
++        char rotValue[PROPERTY_VALUE_MAX];
++        property_get("ro.sf.hwrotation", rotValue, "0");
++        const int additionalRot = atoi(rotValue) / 90;
++        if ((type == DisplayDevice::DISPLAY_PRIMARY) &&
++                (additionalRot & DisplayState::eOrientationSwapMask)) {
++            info.w = hwConfig.height;
++            info.h = hwConfig.width;
++            info.xdpi = ydpi;
++            info.ydpi = xdpi;
++        } else {
++            info.w = hwConfig.width;
++            info.h = hwConfig.height;
++            info.xdpi = xdpi;
++            info.ydpi = ydpi;
++        }
+         info.fps = float(1e9 / hwConfig.refresh);
+         info.appVsyncOffset = vsyncPhaseOffsetNs;
+ 
+@@ -748,6 +766,11 @@ status_t SurfaceFlinger::getDisplayConfigs(const sp<IBinder>& display,
+         // All non-virtual displays are currently considered secure.
+         info.secure = true;
+ 
++        if (DisplayDevice::DISPLAY_PRIMARY == type &&
++            mHwOrientation & DisplayState::eOrientationSwapMask) {
++            std::swap(info.w, info.h);
++        }
++
+         configs->push_back(info);
+     }
+ 
+@@ -3810,14 +3833,37 @@ void SurfaceFlinger::renderScreenImplLocked(
+     // get screen geometry
+     const int32_t hw_w = hw->getWidth();
+     const int32_t hw_h = hw->getHeight();
+-    const bool filtering = static_cast<int32_t>(reqWidth) != hw_w ||
+-                           static_cast<int32_t>(reqHeight) != hw_h;
++    bool filtering = false;
++    if (mHwOrientation & DisplayState::eOrientationSwapMask) {
++        filtering = static_cast<int32_t>(reqWidth) != hw_h ||
++                static_cast<int32_t>(reqHeight) != hw_w;
++    } else {
++        filtering = static_cast<int32_t>(reqWidth) != hw_w ||
++                static_cast<int32_t>(reqHeight) != hw_h;
++    }
+ 
+     // if a default or invalid sourceCrop is passed in, set reasonable values
+     if (sourceCrop.width() == 0 || sourceCrop.height() == 0 ||
+             !sourceCrop.isValid()) {
+         sourceCrop.setLeftTop(Point(0, 0));
+         sourceCrop.setRightBottom(Point(hw_w, hw_h));
++    } else if (hw->getDisplayType() == DisplayDevice::DISPLAY_PRIMARY &&
++            mHwOrientation != DisplayState::eOrientationDefault) {
++        Transform tr;
++        uint32_t flags = 0x00;
++        switch (mHwOrientation) {
++            case DisplayState::eOrientation90:
++                flags = Transform::ROT_90;
++                break;
++            case DisplayState::eOrientation180:
++                flags = Transform::ROT_180;
++                break;
++            case DisplayState::eOrientation270:
++                flags = Transform::ROT_270;
++                break;
++        }
++        tr.set(flags, hw->getWidth(), hw->getHeight());
++        sourceCrop = tr.transform(sourceCrop);
+     }
+ 
+     // ensure that sourceCrop is inside screen
+@@ -3837,6 +3883,37 @@ void SurfaceFlinger::renderScreenImplLocked(
+     // make sure to clear all GL error flags
+     engine.checkErrors();
+ 
++    if (hw->getDisplayType() == DisplayDevice::DISPLAY_PRIMARY &&
++        mHwOrientation != DisplayState::eOrientationDefault) {
++        // convert hw orientation into flag presentation
++        // here inverse transform needed
++        uint8_t hw_rot_90  = 0x00;
++        uint8_t hw_flip_hv = 0x00;
++        switch (mHwOrientation) {
++            case DisplayState::eOrientation90:
++                hw_rot_90 = Transform::ROT_90;
++                hw_flip_hv = Transform::ROT_180;
++                break;
++            case DisplayState::eOrientation180:
++                hw_flip_hv = Transform::ROT_180;
++                break;
++            case DisplayState::eOrientation270:
++                hw_rot_90  = Transform::ROT_90;
++                break;
++        }
++
++        // transform flags operation
++        // 1) flip H V if both have ROT_90 flag
++        // 2) XOR these flags
++        uint8_t rotation_rot_90  = rotation & Transform::ROT_90;
++        uint8_t rotation_flip_hv = rotation & Transform::ROT_180;
++        if (rotation_rot_90 & hw_rot_90) {
++            rotation_flip_hv = (~rotation_flip_hv) & Transform::ROT_180;
++        }
++        rotation = static_cast<Transform::orientation_flags>
++                   ((rotation_rot_90 ^ hw_rot_90) | (rotation_flip_hv ^ hw_flip_hv));
++    }
++
+     // set-up our viewport
+     engine.setViewportAndProjection(
+         reqWidth, reqHeight, sourceCrop, hw_h, yswap, rotation);
+@@ -3885,6 +3962,10 @@ status_t SurfaceFlinger::captureScreenImplLocked(
+     uint32_t hw_w = hw->getWidth();
+     uint32_t hw_h = hw->getHeight();
+ 
++    if (mHwOrientation & DisplayState::eOrientationSwapMask) {
++        std::swap(hw_w, hw_h);
++    }
++
+     if (rotation & Transform::ROT_90) {
+         std::swap(hw_w, hw_h);
+     }

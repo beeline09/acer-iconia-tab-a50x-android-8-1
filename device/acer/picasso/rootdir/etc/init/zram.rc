@@ -1,0 +1,3 @@
+service zramsetup /system/bin/sh /system/etc/zram.sh
+    class main
+    oneshot

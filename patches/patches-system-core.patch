@@ -1,0 +1,136 @@
+diff --git a/adb/shell_service.cpp b/adb/shell_service.cpp
+index 5b48da0290..0819500224 100644
+--- a/adb/shell_service.cpp
++++ b/adb/shell_service.cpp
+@@ -327,8 +327,12 @@ bool Subprocess::ForkAndExec(std::string* error) {
+ 
+         if (command_.empty()) {
+             execle(_PATH_BSHELL, _PATH_BSHELL, "-", nullptr, cenv.data());
++            if (errno == ENOENT)
++                execle(_PATH_BSHELL2, _PATH_BSHELL2, "-", nullptr, cenv.data());
+         } else {
+             execle(_PATH_BSHELL, _PATH_BSHELL, "-c", command_.c_str(), nullptr, cenv.data());
++            if (errno == ENOENT)
++                execle(_PATH_BSHELL2, _PATH_BSHELL2, "-c", command_.c_str(), nullptr, cenv.data());
+         }
+         WriteFdExactly(child_error_sfd, "exec '" _PATH_BSHELL "' failed: ");
+         WriteFdExactly(child_error_sfd, strerror(errno));
+diff --git a/init/Android.mk b/init/Android.mk
+index 161256e9a8..ee30fd8f6a 100644
+--- a/init/Android.mk
++++ b/init/Android.mk
+@@ -55,6 +55,10 @@ LOCAL_SRC_FILES:= \
+     ueventd.cpp \
+     watchdogd.cpp \
+ 
++ifneq ($(TARGET_IGNORE_RO_BOOT_REVISION),)
++LOCAL_CFLAGS += -DIGNORE_RO_BOOT_REVISION
++endif
++
+ LOCAL_MODULE:= init
+ LOCAL_C_INCLUDES += \
+     system/core/mkbootimg
+diff --git a/init/init.cpp b/init/init.cpp
+index f65bfe08cc..4f883292fc 100644
+--- a/init/init.cpp
++++ b/init/init.cpp
+@@ -509,7 +509,9 @@ static void export_kernel_boot_props() {
+         { "ro.boot.baseband",   "ro.baseband",   "unknown", },
+         { "ro.boot.bootloader", "ro.bootloader", "unknown", },
+         { "ro.boot.hardware",   "ro.hardware",   "unknown", },
++#ifndef IGNORE_RO_BOOT_REVISION
+         { "ro.boot.revision",   "ro.revision",   "0", },
++#endif
+     };
+     for (size_t i = 0; i < arraysize(prop_map); i++) {
+         std::string value = GetProperty(prop_map[i].src_prop, "");
+diff --git a/init/reboot.cpp b/init/reboot.cpp
+index 5c7ddf1857..8023fd5746 100644
+--- a/init/reboot.cpp
++++ b/init/reboot.cpp
+@@ -29,6 +29,7 @@
+ #include <sys/syscall.h>
+ #include <sys/types.h>
+ #include <sys/wait.h>
++#include <unistd.h>
+ 
+ #include <memory>
+ #include <set>
+@@ -153,6 +154,31 @@ static void TurnOffBacklight() {
+         std::string fileName = StringPrintf("%s/%s/brightness", backlightDir, dp->d_name);
+         android::base::WriteStringToFile(OFF, fileName);
+     }
++
++    // picasso (Tegra 2): экран mdnie
++    android::base::WriteStringToFile(OFF, "/sys/devices/virtual/mdnie/mdnie/lcd_power");
++}
++
++// picasso (Tegra 2): выгрузить Wi-Fi модуль dhd и увести CPU перед ребутом —
++// иначе зависания/краши Broadcom-стека при перезагрузке
++static void TurnOffWifiAndHotplugCpu() {
++    const int msPerUs = 1000;
++    const char* rmmod_argv[] = {
++        "/system/bin/rmmod", "dhd",
++    };
++    int st;
++    android_fork_execvp_ext(arraysize(rmmod_argv), (char**)rmmod_argv, &st, true, LOG_KLOG, true,
++                            nullptr, nullptr, 0);
++    usleep(1000 * msPerUs);
++
++    android::base::WriteStringToFile("userspace",
++                                     "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor");
++    android::base::WriteStringToFile("1000000",
++                                     "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq");
++    android::base::WriteStringToFile("1000000",
++                                     "/sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq");
++    android::base::WriteStringToFile("0", "/sys/devices/system/cpu/cpu1/online");
++    usleep(1000 * msPerUs);
+ }
+ 
+ static void ShutdownVold() {
+@@ -346,6 +372,9 @@ void DoReboot(unsigned int cmd, const std::string& reason, const std::string& re
+     Timer t;
+     LOG(INFO) << "Reboot start, reason: " << reason << ", rebootTarget: " << rebootTarget;
+ 
++    // picasso: Wi-Fi/CPU-подготовка до остановки сервисов
++    TurnOffWifiAndHotplugCpu();
++
+     android::base::WriteStringToFile(StringPrintf("%s\n", reason.c_str()), LAST_REBOOT_REASON_FILE,
+                                      S_IRUSR | S_IWUSR, AID_SYSTEM, AID_SYSTEM);
+ 
+diff --git a/libcutils/fs_config.cpp b/libcutils/fs_config.cpp
+index cc96ff8546..2d4e0c76e4 100644
+--- a/libcutils/fs_config.cpp
++++ b/libcutils/fs_config.cpp
+@@ -216,6 +216,7 @@ static const struct fs_path_config android_files[] = {
+     { 00750, AID_ROOT,      AID_SHELL,     0, "init*" },
+     { 00750, AID_ROOT,      AID_SHELL,     0, "sbin/*" },
+     { 00755, AID_ROOT,      AID_SHELL,     0, "system/bin/*" },
++    { 00755, AID_ROOT,      AID_SHELL,      0, "system/etc/init.d/*" },
+     { 00755, AID_ROOT,      AID_ROOT,      0, "system/lib/valgrind/*" },
+     { 00755, AID_ROOT,      AID_ROOT,      0, "system/lib64/valgrind/*" },
+     { 00755, AID_ROOT,      AID_SHELL,     0, "system/xbin/*" },
+diff --git a/rootdir/init.environ.rc.in b/rootdir/init.environ.rc.in
+index 2e2ab74653..54e38f7678 100644
+--- a/rootdir/init.environ.rc.in
++++ b/rootdir/init.environ.rc.in
+@@ -9,5 +9,7 @@ on init
+     export ASEC_MOUNTPOINT /mnt/asec
+     export BOOTCLASSPATH %BOOTCLASSPATH%
+     export SYSTEMSERVERCLASSPATH %SYSTEMSERVERCLASSPATH%
++    # PICASSO: NULL-safe str* guard for the ICS-era tegra blobs (workaround)
++    export LD_PRELOAD /system/lib/libnullguard.so
+     %EXPORT_GLOBAL_ASAN_OPTIONS%
+     %EXPORT_GLOBAL_GCOV_OPTIONS%
+diff --git a/rootdir/init.rc b/rootdir/init.rc
+index 2a7333563e..b0036c23bd 100644
+--- a/rootdir/init.rc
++++ b/rootdir/init.rc
+@@ -732,7 +732,3 @@ on property:ro.debuggable=1
+     # The folder is used to store method traces.
+     chmod 0773 /data/misc/trace
+     start console
+-
+-service flash_recovery /system/bin/install-recovery.sh
+-    class main
+-    oneshot

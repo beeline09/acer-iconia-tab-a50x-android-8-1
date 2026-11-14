@@ -1,0 +1,737 @@
+diff --git a/core/Makefile b/core/Makefile
+index 618e98317b..59ac7fb283 100644
+--- a/core/Makefile
++++ b/core/Makefile
+@@ -297,6 +297,7 @@ endif
+ 			TARGET_CPU_ABI="$(TARGET_CPU_ABI)" \
+ 			TARGET_CPU_ABI2="$(TARGET_CPU_ABI2)" \
+ 			TARGET_AAPT_CHARACTERISTICS="$(TARGET_AAPT_CHARACTERISTICS)" \
++			$(PRODUCT_BUILD_PROP_OVERRIDES) \
+ 	        bash $(BUILDINFO_SH) >> $@
+ ifndef property_overrides_split_enabled
+ 	$(hide) TARGET_DEVICE="$(TARGET_DEVICE)" \
+@@ -624,7 +625,7 @@ VERITY_KEYID := veritykeyid=id:`openssl x509 -in $(PRODUCTS.$(INTERNAL_PRODUCT).
+ endif
+ endif
+ 
+-INTERNAL_KERNEL_CMDLINE := $(strip $(BOARD_KERNEL_CMDLINE) buildvariant=$(TARGET_BUILD_VARIANT) $(VERITY_KEYID))
++INTERNAL_KERNEL_CMDLINE := $(strip $(BOARD_KERNEL_CMDLINE))
+ ifdef INTERNAL_KERNEL_CMDLINE
+ INTERNAL_BOOTIMAGE_ARGS += --cmdline "$(INTERNAL_KERNEL_CMDLINE)"
+ endif
+@@ -685,7 +686,9 @@ bootimage-nodeps: $(MKBOOTIMG) $(BOOT_SIGNER)
+ 	$(BOOT_SIGNER) /boot $(INSTALLED_BOOTIMAGE_TARGET) $(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_VERITY_SIGNING_KEY).pk8 $(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_VERITY_SIGNING_KEY).x509.pem $(INSTALLED_BOOTIMAGE_TARGET)
+ 	$(hide) $(call assert-max-image-size,$(INSTALLED_BOOTIMAGE_TARGET),$(BOARD_BOOTIMAGE_PARTITION_SIZE))
+ 
+-else ifeq (true,$(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_SUPPORTS_VBOOT)) # PRODUCT_SUPPORTS_BOOT_SIGNER != true
++else ifndef BOARD_CUSTOM_BOOTIMG_MK
++
++  ifeq (true,$(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_SUPPORTS_VBOOT)) # PRODUCT_SUPPORTS_BOOT_SIGNER != true
+ 
+ $(INSTALLED_BOOTIMAGE_TARGET): $(MKBOOTIMG) $(INTERNAL_BOOTIMAGE_FILES) $(VBOOT_SIGNER) $(FUTILITY)
+ 	$(call pretty,"Target boot image: $@")
+@@ -700,7 +703,7 @@ bootimage-nodeps: $(MKBOOTIMG) $(VBOOT_SIGNER) $(FUTILITY)
+ 	$(VBOOT_SIGNER) $(FUTILITY) $(INSTALLED_BOOTIMAGE_TARGET).unsigned $(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_VBOOT_SIGNING_KEY).vbpubk $(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_VBOOT_SIGNING_KEY).vbprivk $(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_VBOOT_SIGNING_SUBKEY).vbprivk $(INSTALLED_BOOTIMAGE_TARGET).keyblock $(INSTALLED_BOOTIMAGE_TARGET)
+ 	$(hide) $(call assert-max-image-size,$(INSTALLED_BOOTIMAGE_TARGET),$(BOARD_BOOTIMAGE_PARTITION_SIZE))
+ 
+-else # PRODUCT_SUPPORTS_VBOOT != true
++  else # PRODUCT_SUPPORTS_VBOOT != true
+ 
+ $(INSTALLED_BOOTIMAGE_TARGET): $(MKBOOTIMG) $(INTERNAL_BOOTIMAGE_FILES)
+ 	$(call pretty,"Target boot image: $@")
+@@ -713,7 +716,8 @@ bootimage-nodeps: $(MKBOOTIMG)
+ 	$(hide) $(MKBOOTIMG) $(INTERNAL_BOOTIMAGE_ARGS) $(INTERNAL_MKBOOTIMG_VERSION_ARGS) $(BOARD_MKBOOTIMG_ARGS) --output $(INSTALLED_BOOTIMAGE_TARGET)
+ 	$(hide) $(call assert-max-image-size,$(INSTALLED_BOOTIMAGE_TARGET),$(BOARD_BOOTIMAGE_PARTITION_SIZE))
+ 
+-endif # TARGET_BOOTIMAGE_USE_EXT2
++  endif # PRODUCT_SUPPORTS_VBOOT
++endif # TARGET_BOOTIMAGE_USE_EXT2 / BOARD_CUSTOM_BOOTIMG_MK
+ endif # BOARD_USES_RECOVERY_AS_BOOT
+ 
+ else	# TARGET_NO_KERNEL
+@@ -1240,7 +1244,11 @@ define build-recoveryimage-target
+     $(hide) mkdir -p $(TARGET_RECOVERY_ROOT_OUT)/system_root; \
+             rm -rf $(TARGET_RECOVERY_ROOT_OUT)/system; \
+             ln -sf /system_root/system $(TARGET_RECOVERY_ROOT_OUT)/system) # Mount the system_root_image to /system_root and symlink /system.
+-  $(hide) $(MKBOOTFS) -d $(TARGET_OUT) $(TARGET_RECOVERY_ROOT_OUT) | $(MINIGZIP) > $(recovery_ramdisk)
++endef
++
++RECOVERYIMAGE_ID_FILE := $(PRODUCT_OUT)/recovery.id
++# $(1): output file
++define build-recoveryimage-target
+   $(if $(filter true,$(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_SUPPORTS_VBOOT)), \
+     $(hide) $(MKBOOTIMG) $(INTERNAL_RECOVERYIMAGE_ARGS) $(INTERNAL_MKBOOTIMG_VERSION_ARGS) $(BOARD_MKBOOTIMG_ARGS) --output $(1).unsigned, \
+     $(hide) $(MKBOOTIMG) $(INTERNAL_RECOVERYIMAGE_ARGS) $(INTERNAL_MKBOOTIMG_VERSION_ARGS) $(BOARD_MKBOOTIMG_ARGS) --output $(1) --id > $(RECOVERYIMAGE_ID_FILE))
+@@ -1295,7 +1303,7 @@ $(INSTALLED_RECOVERYIMAGE_TARGET): $(MKBOOTFS) $(MKBOOTIMG) $(MINIGZIP) $(ADBD)
+ 		$(INSTALLED_RAMDISK_TARGET) \
+ 		$(INSTALLED_BOOTIMAGE_TARGET) \
+ 		$(INTERNAL_RECOVERYIMAGE_FILES) \
+-		$(recovery_initrc) $(recovery_sepolicy) $(recovery_kernel) \
++		$(recovery_initrc) $(recovery_sepolicy) \
+ 		$(INSTALLED_2NDBOOTLOADER_TARGET) \
+ 		$(recovery_build_props) $(recovery_resource_deps) \
+ 		$(recovery_fstab) \
+@@ -1315,6 +1323,9 @@ endif
+ .PHONY: recoveryimage-nodeps
+ recoveryimage-nodeps:
+ 	@echo "make $@: ignoring dependencies"
++	$(call build-recoveryramdisk)
++	$(hide) $(MKBOOTFS) $(TARGET_RECOVERY_ROOT_OUT) > $(recovery_uncompressed_ramdisk)
++	$(hide) $(MINIGZIP) < $(recovery_uncompressed_ramdisk) > $(recovery_ramdisk)
+ 	$(call build-recoveryimage-target, $(INSTALLED_RECOVERYIMAGE_TARGET))
+ 
+ else # INSTALLED_RECOVERYIMAGE_TARGET not defined
+@@ -1332,6 +1343,11 @@ ifeq ($(BOARD_NAND_SPARE_SIZE),)
+ BOARD_NAND_SPARE_SIZE := 64
+ endif
+ 
++ifdef BOARD_CUSTOM_BOOTIMG_MK
++include $(BOARD_CUSTOM_BOOTIMG_MK)
++endif
++
++
+ # -----------------------------------------------------------------
+ # system image
+ #
+@@ -2471,7 +2487,7 @@ endif
+ 	$(call generate-userimage-prop-dictionary, $(zip_root)/META/misc_info.txt)
+ ifneq ($(INSTALLED_RECOVERYIMAGE_TARGET),)
+ 	$(hide) PATH=$(foreach p,$(INTERNAL_USERIMAGES_BINARY_PATHS),$(p):)$$PATH MKBOOTIMG=$(MKBOOTIMG) \
+-	    ./build/tools/releasetools/make_recovery_patch $(zip_root) $(zip_root)
++	    $(if $(filter true,$(BOARD_OMIT_RECOVERY_FROM_SYSTEM)),true,./build/tools/releasetools/make_recovery_patch $(zip_root) $(zip_root))
+ endif
+ ifeq ($(AB_OTA_UPDATER),true)
+ 	@# When using the A/B updater, include the updater config files in the zip.
+@@ -2600,7 +2616,7 @@ name := $(TARGET_PRODUCT)
+ ifeq ($(TARGET_BUILD_TYPE),debug)
+   name := $(name)_debug
+ endif
+-name := $(name)-ota-$(FILE_NAME_TAG)
++name := aosp-7.1-$(name)-$(shell date +"%Y%m%d")
+ 
+ INTERNAL_OTA_PACKAGE_TARGET := $(PRODUCT_OUT)/$(name).zip
+ 
+@@ -2621,6 +2637,7 @@ $(INTERNAL_OTA_PACKAGE_TARGET): $(BUILT_TARGET_FILES_PACKAGE) \
+ 	   --extracted_input_target_files $(patsubst %.zip,%,$(BUILT_TARGET_FILES_PACKAGE)) \
+ 	   -p $(HOST_OUT) \
+ 	   -k $(KEY_CERT_PAIR) \
++    --backup=$(backuptool) \
+ 	   $(if $(OEM_OTA_CONFIG), -o $(OEM_OTA_CONFIG)) \
+ 	   $(BUILT_TARGET_FILES_PACKAGE) $@
+ 
+diff --git a/core/combo/arch/arm/armv7-a.mk b/core/combo/arch/arm/armv7-a.mk
+index 0c2f04d24a..d70237275f 100644
+--- a/core/combo/arch/arm/armv7-a.mk
++++ b/core/combo/arch/arm/armv7-a.mk
+@@ -3,3 +3,15 @@
+ #
+ ARCH_ARM_HAVE_ARMV7A            := true
+ ARCH_ARM_HAVE_VFP               := true
++ARCH_ARM_HAVE_NEON              :=
++
++# Note: Hard coding the 'tune' value here is probably not ideal,
++# and a better solution should be found in the future.
++#
++
++arch_variant_cflags += \
++    -mcpu=cortex-a9 \
++    -mfloat-abi=softfp \
++    -mfpu=vfpv3-d16
++arch_variant_ldflags := \
++    -Wl,--no-fix-cortex-a8
+diff --git a/core/config.mk b/core/config.mk
+index cc2b2af12b..fcae5d0a52 100644
+--- a/core/config.mk
++++ b/core/config.mk
+@@ -609,6 +609,7 @@ else
+ AVBTOOL := $(BOARD_CUSTOM_AVBTOOL)
+ endif
+ APICHECK := $(HOST_OUT_EXECUTABLES)/apicheck$(HOST_EXECUTABLE_SUFFIX)
++MKIMAGE :=  $(HOST_OUT_EXECUTABLES)/mkimage$(HOST_EXECUTABLE_SUFFIX)
+ FS_GET_STATS := $(HOST_OUT_EXECUTABLES)/fs_get_stats$(HOST_EXECUTABLE_SUFFIX)
+ ifeq ($(TARGET_USES_MKE2FS),true)
+ MAKE_EXT4FS := $(HOST_OUT_EXECUTABLES)/mke2fs$(HOST_EXECUTABLE_SUFFIX)
+diff --git a/core/definitions.mk b/core/definitions.mk
+index 95e9a020d2..baaf500597 100644
+--- a/core/definitions.mk
++++ b/core/definitions.mk
+@@ -2234,8 +2234,8 @@ $(hide) if [ -s $(PRIVATE_CLASS_INTERMEDIATES_DIR)/java-source-list-uniq ] ; the
+ fi
+ $(if $(PRIVATE_JAVA_LAYERS_FILE), $(hide) build/tools/java-layers.py \
+     $(PRIVATE_JAVA_LAYERS_FILE) \@$(PRIVATE_CLASS_INTERMEDIATES_DIR)/java-source-list-uniq,)
+-$(hide) rm -f $(PRIVATE_CLASS_INTERMEDIATES_DIR)/java-source-list
+-$(hide) rm -f $(PRIVATE_CLASS_INTERMEDIATES_DIR)/java-source-list-uniq
++#KEEP-LIST
++#KEEP-LIST2
+ $(if $(PRIVATE_JAR_EXCLUDE_FILES), $(hide) find $(PRIVATE_CLASS_INTERMEDIATES_DIR) \
+     -name $(word 1, $(PRIVATE_JAR_EXCLUDE_FILES)) \
+     $(addprefix -o -name , $(wordlist 2, 999, $(PRIVATE_JAR_EXCLUDE_FILES))) \
+diff --git a/core/envsetup.mk b/core/envsetup.mk
+index 46066e3462..9defc7b152 100644
+--- a/core/envsetup.mk
++++ b/core/envsetup.mk
+@@ -229,10 +229,6 @@ include $(board_config_mk)
+ ifeq ($(TARGET_ARCH),)
+   $(error TARGET_ARCH not defined by board config: $(board_config_mk))
+ endif
+-ifneq ($(MALLOC_IMPL),)
+-  $(warning *** Unsupported option MALLOC_IMPL defined by board config: $(board_config_mk).)
+-  $(error Use `MALLOC_SVELTE := true` to configure jemalloc for low-memory)
+-endif
+ TARGET_DEVICE_DIR := $(patsubst %/,%,$(dir $(board_config_mk)))
+ board_config_mk :=
+ 
+@@ -301,8 +297,12 @@ endif
+ 
+ ifeq (,$(strip $(OUT_DIR)))
+ ifeq (,$(strip $(OUT_DIR_COMMON_BASE)))
++ifneq ($(TOPDIR),)
+ OUT_DIR := $(TOPDIR)out
+ else
++OUT_DIR := $(shell readlink -f .)/out
++endif
++else
+ OUT_DIR := $(OUT_DIR_COMMON_BASE)/$(notdir $(PWD))
+ endif
+ endif
+diff --git a/core/product.mk b/core/product.mk
+index 102d17f2d8..ebd0c59c60 100644
+--- a/core/product.mk
++++ b/core/product.mk
+@@ -73,6 +73,7 @@ endef
+ #
+ 
+ _product_var_list := \
++    PRODUCT_BUILD_PROP_OVERRIDES \
+     PRODUCT_NAME \
+     PRODUCT_MODEL \
+     PRODUCT_LOCALES \
+diff --git a/core/product_config.mk b/core/product_config.mk
+index 7707a5d307..9197eb60bd 100644
+--- a/core/product_config.mk
++++ b/core/product_config.mk
+@@ -359,6 +359,9 @@ PRODUCT_DEFAULT_PROPERTY_OVERRIDES := \
+     $(strip $(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_DEFAULT_PROPERTY_OVERRIDES))
+ .KATI_READONLY := PRODUCT_DEFAULT_PROPERTY_OVERRIDES
+ 
++PRODUCT_BUILD_PROP_OVERRIDES := \
++	$(strip $(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_BUILD_PROP_OVERRIDES))
++
+ # Should we use the default resources or add any product specific overlays
+ PRODUCT_PACKAGE_OVERLAYS := \
+     $(strip $(PRODUCTS.$(INTERNAL_PRODUCT).PRODUCT_PACKAGE_OVERLAYS))
+diff --git a/core/tasks/kernel.mk b/core/tasks/kernel.mk
+new file mode 100644
+index 0000000000..eedf6ca194
+--- /dev/null
++++ b/core/tasks/kernel.mk
+@@ -0,0 +1,367 @@
++# Copyright (C) 2012 The CyanogenMod Project
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++
++# Android makefile to build kernel as a part of Android Build
++#
++# Configuration
++# =============
++#
++# These config vars are usually set in BoardConfig.mk:
++#
++#   TARGET_KERNEL_SOURCE               = Kernel source dir, optional, defaults
++#                                        to kernel/$(TARGET_DEVICE_DIR)
++#   TARGET_KERNEL_CONFIG               = Kernel defconfig
++#   TARGET_KERNEL_VARIANT_CONFIG       = Variant defconfig, optional
++#   TARGET_KERNEL_SELINUX_CONFIG       = SELinux defconfig, optional
++#   TARGET_KERNEL_ADDITIONAL_CONFIG    = Additional defconfig, optional
++#   TARGET_KERNEL_ARCH                 = Kernel Arch
++#   TARGET_KERNEL_HEADER_ARCH          = Optional Arch for kernel headers if
++#                                          different from TARGET_KERNEL_ARCH
++#   TARGET_USES_UNCOMPRESSED_KERNEL    = 'true' if Kernel is uncompressed,
++#                                          optional, defaults to false
++#   TARGET_KERNEL_CROSS_COMPILE_PREFIX = Compiler prefix (e.g. aarch64-linux-android-)
++#                                          defaults to arm-eabi-
++#
++#   BOARD_KERNEL_IMAGE_NAME            = Built image name, optional,
++#                                          defaults to Image.gz on arm64
++#                                          defaults to Image if TARGET_USES_UNCOMPRESSED_KERNEL
++#                                          defaults to zImage otherwise
++#
++#   KERNEL_TOOLCHAIN_PREFIX            = Overrides TARGET_KERNEL_CROSS_COMPILE_PREFIX,
++#                                          Set this var in shell to override
++#                                          toolchain specified in BoardConfig.mk
++#   KERNEL_TOOLCHAIN                   = Path to toolchain, if unset, assumes
++#                                          TARGET_KERNEL_CROSS_COMPILE_PREFIX
++#                                          is in PATH
++#   USE_CCACHE                         = Enable ccache (global Android flag)
++#
++#   NEED_KERNEL_MODULE_ROOT            = Optional, if true, install kernel
++#                                          modules in root instead of system
++
++
++TARGET_AUTO_KDIR := $(shell echo $(TARGET_DEVICE_DIR) | sed -e 's/^device/kernel/g')
++
++## Externally influenced variables
++# kernel location - optional, defaults to kernel/<vendor>/<device>
++TARGET_KERNEL_SOURCE ?= $(TARGET_AUTO_KDIR)
++KERNEL_SRC := $(TARGET_KERNEL_SOURCE)
++# kernel configuration - mandatory
++KERNEL_DEFCONFIG := $(TARGET_KERNEL_CONFIG)
++VARIANT_DEFCONFIG := $(TARGET_KERNEL_VARIANT_CONFIG)
++SELINUX_DEFCONFIG := $(TARGET_KERNEL_SELINUX_CONFIG)
++
++## Internal variables
++KERNEL_OUT := $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ
++KERNEL_CONFIG := $(KERNEL_OUT)/.config
++KERNEL_OUT_STAMP := $(KERNEL_OUT)/.mkdir_stamp
++
++TARGET_KERNEL_ARCH := $(strip $(TARGET_KERNEL_ARCH))
++ifeq ($(TARGET_KERNEL_ARCH),)
++KERNEL_ARCH := $(TARGET_ARCH)
++else
++KERNEL_ARCH := $(TARGET_KERNEL_ARCH)
++endif
++
++ifeq ($(KERNEL_ARCH),x86_64)
++KERNEL_DEFCONFIG_ARCH := x86
++else
++KERNEL_DEFCONFIG_ARCH := $(KERNEL_ARCH)
++endif
++KERNEL_DEFCONFIG_SRC := $(KERNEL_SRC)/arch/$(KERNEL_DEFCONFIG_ARCH)/configs/$(KERNEL_DEFCONFIG)
++
++TARGET_KERNEL_HEADER_ARCH := $(strip $(TARGET_KERNEL_HEADER_ARCH))
++ifeq ($(TARGET_KERNEL_HEADER_ARCH),)
++KERNEL_HEADER_ARCH := $(KERNEL_ARCH)
++else
++KERNEL_HEADER_ARCH := $(TARGET_KERNEL_HEADER_ARCH)
++endif
++
++KERNEL_HEADER_DEFCONFIG := $(strip $(KERNEL_HEADER_DEFCONFIG))
++ifeq ($(KERNEL_HEADER_DEFCONFIG),)
++KERNEL_HEADER_DEFCONFIG := $(KERNEL_DEFCONFIG)
++endif
++
++
++ifneq ($(BOARD_KERNEL_IMAGE_NAME),)
++  TARGET_PREBUILT_INT_KERNEL_TYPE := $(BOARD_KERNEL_IMAGE_NAME)
++else
++  ifeq ($(TARGET_USES_UNCOMPRESSED_KERNEL),true)
++    TARGET_PREBUILT_INT_KERNEL_TYPE := Image
++  else
++    ifeq ($(KERNEL_ARCH),arm64)
++      TARGET_PREBUILT_INT_KERNEL_TYPE := Image.gz
++    else
++      TARGET_PREBUILT_INT_KERNEL_TYPE := zImage
++    endif
++  endif
++endif
++
++TARGET_PREBUILT_INT_KERNEL := $(KERNEL_OUT)/arch/$(KERNEL_ARCH)/boot/$(TARGET_PREBUILT_INT_KERNEL_TYPE)
++
++# Clear this first to prevent accidental poisoning from env
++MAKE_FLAGS :=
++
++ifeq ($(KERNEL_ARCH),arm64)
++  # Avoid "unsupported RELA relocation: 311" errors (R_AARCH64_ADR_GOT_PAGE)
++  MAKE_FLAGS += CFLAGS_MODULE="-fno-pic"
++  ifeq ($(TARGET_ARCH),arm)
++    KERNEL_CONFIG_OVERRIDE := CONFIG_ANDROID_BINDER_IPC_32BIT=y
++  endif
++endif
++
++ifneq ($(TARGET_KERNEL_ADDITIONAL_CONFIG),)
++KERNEL_ADDITIONAL_CONFIG := $(TARGET_KERNEL_ADDITIONAL_CONFIG)
++KERNEL_ADDITIONAL_CONFIG_SRC := $(KERNEL_SRC)/arch/$(KERNEL_ARCH)/configs/$(KERNEL_ADDITIONAL_CONFIG)
++    ifeq ("$(wildcard $(KERNEL_ADDITIONAL_CONFIG_SRC))","")
++        $(warning TARGET_KERNEL_ADDITIONAL_CONFIG '$(TARGET_KERNEL_ADDITIONAL_CONFIG)' doesn't exist)
++        KERNEL_ADDITIONAL_CONFIG_SRC := /dev/null
++    endif
++else
++    KERNEL_ADDITIONAL_CONFIG_SRC := /dev/null
++endif
++
++## Do be discontinued in a future version. Notify builder about target
++## kernel format requirement
++ifeq ($(BOARD_KERNEL_IMAGE_NAME),)
++ifeq ($(BOARD_USES_UBOOT),true)
++        $(error "Please set BOARD_KERNEL_IMAGE_NAME to uImage")
++else ifeq ($(BOARD_USES_UNCOMPRESSED_BOOT),true)
++        $(error "Please set BOARD_KERNEL_IMAGE_NAME to Image")
++endif
++endif
++
++ifeq "$(wildcard $(KERNEL_SRC) )" ""
++    ifneq ($(TARGET_PREBUILT_KERNEL),)
++        HAS_PREBUILT_KERNEL := true
++        NEEDS_KERNEL_COPY := true
++    else
++        $(foreach cf,$(PRODUCT_COPY_FILES), \
++            $(eval _src := $(call word-colon,1,$(cf))) \
++            $(eval _dest := $(call word-colon,2,$(cf))) \
++            $(ifeq kernel,$(_dest), \
++                $(eval HAS_PREBUILT_KERNEL := true)))
++    endif
++
++    ifneq ($(HAS_PREBUILT_KERNEL),)
++        $(warning ***************************************************************)
++        $(warning * Using prebuilt kernel binary instead of source              *)
++        $(warning * THIS IS DEPRECATED, AND WILL BE DISCONTINUED                *)
++        $(warning * Please configure your device to download the kernel         *)
++        $(warning * source repository to $(KERNEL_SRC))
++        $(warning * See http://wiki.cyanogenmod.org/w/Doc:_integrated_kernel_building)
++        $(warning * for more information                                        *)
++        $(warning ***************************************************************)
++        FULL_KERNEL_BUILD := false
++        KERNEL_BIN := $(TARGET_PREBUILT_KERNEL)
++    else
++        $(warning ***************************************************************)
++        $(warning *                                                             *)
++        $(warning * No kernel source found, and no fallback prebuilt defined.   *)
++        $(warning * Please make sure your device is properly configured to      *)
++        $(warning * download the kernel repository to $(KERNEL_SRC))
++        $(warning * and add the TARGET_KERNEL_CONFIG variable to BoardConfig.mk *)
++        $(warning *                                                             *)
++        $(warning * As an alternative, define the TARGET_PREBUILT_KERNEL        *)
++        $(warning * variable with the path to the prebuilt binary kernel image  *)
++        $(warning * in your BoardConfig.mk file                                 *)
++        $(warning *                                                             *)
++        $(warning ***************************************************************)
++        $(error "NO KERNEL")
++    endif
++else
++    NEEDS_KERNEL_COPY := true
++    ifeq ($(TARGET_KERNEL_CONFIG),)
++        $(warning **********************************************************)
++        $(warning * Kernel source found, but no configuration was defined  *)
++        $(warning * Please add the TARGET_KERNEL_CONFIG variable to your   *)
++        $(warning * BoardConfig.mk file                                    *)
++        $(warning **********************************************************)
++        # $(error "NO KERNEL CONFIG")
++    else
++        #$(info Kernel source found, building it)
++        FULL_KERNEL_BUILD := true
++        KERNEL_BIN := $(TARGET_PREBUILT_INT_KERNEL)
++    endif
++endif
++
++ifeq ($(FULL_KERNEL_BUILD),true)
++
++KERNEL_HEADERS_INSTALL := $(KERNEL_OUT)/usr
++KERNEL_HEADERS_INSTALL_STAMP := $(KERNEL_OUT)/.headers_install_stamp
++
++ifeq ($(NEED_KERNEL_MODULE_ROOT),true)
++KERNEL_MODULES_INSTALL := root
++KERNEL_MODULES_OUT := $(TARGET_ROOT_OUT)/lib/modules
++else
++KERNEL_MODULES_INSTALL := system
++KERNEL_MODULES_OUT := $(TARGET_OUT)/lib/modules
++endif
++
++TARGET_KERNEL_CROSS_COMPILE_PREFIX := $(strip $(TARGET_KERNEL_CROSS_COMPILE_PREFIX))
++ifeq ($(TARGET_KERNEL_CROSS_COMPILE_PREFIX),)
++KERNEL_TOOLCHAIN_PREFIX ?= arm-eabi-
++else
++KERNEL_TOOLCHAIN_PREFIX ?= $(TARGET_KERNEL_CROSS_COMPILE_PREFIX)
++endif
++
++ifeq ($(KERNEL_TOOLCHAIN),)
++KERNEL_TOOLCHAIN_PATH := $(KERNEL_TOOLCHAIN_PREFIX)
++else
++ifneq ($(KERNEL_TOOLCHAIN_PREFIX),)
++KERNEL_TOOLCHAIN_PATH := $(KERNEL_TOOLCHAIN)/$(KERNEL_TOOLCHAIN_PREFIX)
++endif
++endif
++
++ifneq ($(USE_CCACHE),)
++    ccache := $(ANDROID_BUILD_TOP)/prebuilts/misc/$(HOST_PREBUILT_TAG)/ccache/ccache
++    # Check that the executable is here.
++    ccache := $(strip $(wildcard $(ccache)))
++endif
++
++KERNEL_CROSS_COMPILE := CROSS_COMPILE="$(ccache) $(KERNEL_TOOLCHAIN_PATH)"
++ccache =
++
++define mv-modules
++    mdpath=`find $(KERNEL_MODULES_OUT) -type f -name modules.order`;\
++    if [ "$$mdpath" != "" ];then\
++        mpath=`dirname $$mdpath`;\
++        ko=`find $$mpath/kernel -type f -name *.ko`;\
++        for i in $$ko; do $(KERNEL_TOOLCHAIN_PATH)strip --strip-unneeded $$i;\
++        mv $$i $(KERNEL_MODULES_OUT)/; done;\
++    fi
++endef
++
++define clean-module-folder
++    mdpath=`find $(KERNEL_MODULES_OUT) -type f -name modules.order`;\
++    if [ "$$mdpath" != "" ];then\
++        mpath=`dirname $$mdpath`; rm -rf $$mpath;\
++    fi
++endef
++
++ifeq ($(HOST_OS),darwin)
++  MAKE_FLAGS += C_INCLUDE_PATH=$(ANDROID_BUILD_TOP)/external/elfutils/src/libelf/
++endif
++
++ifeq ($(TARGET_KERNEL_MODULES),)
++    TARGET_KERNEL_MODULES := no-external-modules
++endif
++
++$(KERNEL_OUT_STAMP):
++	$(hide) mkdir -p $(KERNEL_OUT)
++	$(hide) rm -rf $(KERNEL_MODULES_OUT)
++	$(hide) mkdir -p $(KERNEL_MODULES_OUT)
++	$(hide) touch $@
++
++KERNEL_ADDITIONAL_CONFIG_OUT := $(KERNEL_OUT)/.additional_config
++
++.PHONY: force_additional_config
++$(KERNEL_ADDITIONAL_CONFIG_OUT): force_additional_config
++	$(hide) cmp -s $(KERNEL_ADDITIONAL_CONFIG_SRC) $@ || cp $(KERNEL_ADDITIONAL_CONFIG_SRC) $@;
++
++$(KERNEL_CONFIG): $(KERNEL_OUT_STAMP) $(KERNEL_DEFCONFIG_SRC) $(KERNEL_ADDITIONAL_CONFIG_OUT)
++	@echo -e ${CL_GRN}"Building Kernel Config"${CL_RST}
++	$(MAKE) $(MAKE_FLAGS) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) VARIANT_DEFCONFIG=$(VARIANT_DEFCONFIG) SELINUX_DEFCONFIG=$(SELINUX_DEFCONFIG) $(KERNEL_DEFCONFIG)
++	$(hide) if [ ! -z "$(KERNEL_CONFIG_OVERRIDE)" ]; then \
++			echo "Overriding kernel config with '$(KERNEL_CONFIG_OVERRIDE)'"; \
++			echo $(KERNEL_CONFIG_OVERRIDE) >> $(KERNEL_OUT)/.config; \
++			$(MAKE) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) oldconfig; fi
++	$(hide) if [ ! -z "$(KERNEL_ADDITIONAL_CONFIG)" ]; then \
++			echo "Using additional config '$(KERNEL_ADDITIONAL_CONFIG)'"; \
++			$(KERNEL_SRC)/scripts/kconfig/merge_config.sh -m -O $(KERNEL_OUT) $(KERNEL_OUT)/.config $(KERNEL_SRC)/arch/$(KERNEL_ARCH)/configs/$(KERNEL_ADDITIONAL_CONFIG); \
++			$(MAKE) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) KCONFIG_ALLCONFIG=$(KERNEL_OUT)/.config alldefconfig; fi
++
++TARGET_KERNEL_BINARIES: $(KERNEL_OUT_STAMP) $(KERNEL_CONFIG) $(KERNEL_HEADERS_INSTALL_STAMP)
++	@echo -e ${CL_GRN}"Building Kernel"${CL_RST}
++	$(MAKE) $(MAKE_FLAGS) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) $(TARGET_PREBUILT_INT_KERNEL_TYPE)
++	$(hide) if grep -q 'CONFIG_OF=y' $(KERNEL_CONFIG) ; \
++			then \
++				echo -e ${CL_GRN}"Building DTBs"${CL_RST} ; \
++				$(MAKE) $(MAKE_FLAGS) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) dtbs ; \
++			else \
++				echo "DTBs not enabled" ; \
++			fi ;
++	$(hide) if grep -q 'CONFIG_MODULES=y' $(KERNEL_CONFIG) ; \
++			then \
++				echo -e ${CL_GRN}"Building Kernel Modules"${CL_RST} ; \
++				$(MAKE) $(MAKE_FLAGS) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) modules && \
++				$(MAKE) $(MAKE_FLAGS) -C $(KERNEL_SRC) O=$(KERNEL_OUT) INSTALL_MOD_PATH=../../$(KERNEL_MODULES_INSTALL) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) modules_install && \
++				$(mv-modules) && \
++				$(clean-module-folder) ; \
++			else \
++				echo "Kernel Modules not enabled" ; \
++			fi ;
++
++
++$(TARGET_KERNEL_MODULES): TARGET_KERNEL_BINARIES
++
++$(TARGET_PREBUILT_INT_KERNEL): $(TARGET_KERNEL_MODULES)
++	$(mv-modules)
++	$(clean-module-folder)
++
++$(KERNEL_HEADERS_INSTALL_STAMP): $(KERNEL_OUT_STAMP) $(KERNEL_CONFIG)
++	@echo -e ${CL_GRN}"Building Kernel Headers"${CL_RST}
++	$(hide) if [ ! -z "$(KERNEL_HEADER_DEFCONFIG)" ]; then \
++			rm -f ../$(KERNEL_CONFIG); \
++			$(MAKE) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_HEADER_ARCH) $(KERNEL_CROSS_COMPILE) VARIANT_DEFCONFIG=$(VARIANT_DEFCONFIG) SELINUX_DEFCONFIG=$(SELINUX_DEFCONFIG) $(KERNEL_HEADER_DEFCONFIG); \
++			$(MAKE) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_HEADER_ARCH) $(KERNEL_CROSS_COMPILE) headers_install; fi
++	$(hide) if [ "$(KERNEL_HEADER_DEFCONFIG)" != "$(KERNEL_DEFCONFIG)" ]; then \
++			echo "Used a different defconfig for header generation"; \
++			rm -f ../$(KERNEL_CONFIG); \
++			$(MAKE) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) VARIANT_DEFCONFIG=$(VARIANT_DEFCONFIG) SELINUX_DEFCONFIG=$(SELINUX_DEFCONFIG) $(KERNEL_DEFCONFIG); fi
++	$(hide) if [ ! -z "$(KERNEL_CONFIG_OVERRIDE)" ]; then \
++			echo "Overriding kernel config with '$(KERNEL_CONFIG_OVERRIDE)'"; \
++			echo $(KERNEL_CONFIG_OVERRIDE) >> $(KERNEL_OUT)/.config; \
++			$(MAKE) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) oldconfig; fi
++	$(hide) if [ ! -z "$(KERNEL_ADDITIONAL_CONFIG)" ]; then \
++			echo "Using additional config '$(KERNEL_ADDITIONAL_CONFIG)'"; \
++			$(KERNEL_SRC)/scripts/kconfig/merge_config.sh -m -O $(KERNEL_OUT) $(KERNEL_OUT)/.config $(KERNEL_SRC)/arch/$(KERNEL_ARCH)/configs/$(KERNEL_ADDITIONAL_CONFIG); \
++			$(MAKE) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) KCONFIG_ALLCONFIG=$(KERNEL_OUT)/.config alldefconfig; fi
++	$(hide) touch $@
++
++# provide this rule because there are dependencies on this throughout the repo
++$(KERNEL_HEADERS_INSTALL): $(KERNEL_HEADERS_INSTALL_STAMP)
++
++kerneltags: $(KERNEL_OUT_STAMP) $(KERNEL_CONFIG)
++	$(MAKE) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) tags
++
++kernelconfig:  KERNELCONFIG_MODE := menuconfig
++kernelxconfig: KERNELCONFIG_MODE := xconfig
++kernelxconfig kernelconfig: $(KERNEL_OUT_STAMP)
++	$(MAKE) $(MAKE_FLAGS) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) $(KERNEL_DEFCONFIG)
++	env KCONFIG_NOTIMESTAMP=true \
++		 $(MAKE) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) $(KERNELCONFIG_MODE)
++	env KCONFIG_NOTIMESTAMP=true \
++		 $(MAKE) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) savedefconfig
++	cp $(KERNEL_OUT)/defconfig $(KERNEL_DEFCONFIG_SRC)
++
++alldefconfig: $(KERNEL_OUT_STAMP)
++	env KCONFIG_NOTIMESTAMP=true \
++		 $(MAKE) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) alldefconfig
++
++endif # FULL_KERNEL_BUILD
++
++## Install it
++
++ifeq ($(NEEDS_KERNEL_COPY),true)
++file := $(INSTALLED_KERNEL_TARGET)
++ALL_PREBUILT += $(file)
++$(file) : $(KERNEL_BIN) | $(ACP)
++	$(transform-prebuilt-to-target)
++
++ALL_PREBUILT += $(INSTALLED_KERNEL_TARGET)
++endif
++
++.PHONY: kernel
++kernel: $(INSTALLED_KERNEL_TARGET)
+diff --git a/envsetup.sh b/envsetup.sh
+index 4cbe3e7250..97bc655cb2 100644
+--- a/envsetup.sh
++++ b/envsetup.sh
+@@ -629,6 +629,8 @@ function lunch()
+ 
+     echo
+ 
++    fixup_common_out_dir
++
+     set_stuff_for_environment
+     printconfig
+     destroy_build_var_cache
+@@ -1540,6 +1542,24 @@ function godir () {
+     \cd $T/$pathname
+ }
+ 
++function fixup_common_out_dir() {
++    common_out_dir=$(get_build_var OUT_DIR)/target/common
++    target_device=$(get_build_var TARGET_DEVICE)
++    if [ ! -z $ANDROID_FIXUP_COMMON_OUT ]; then
++        if [ -d ${common_out_dir} ] && [ ! -L ${common_out_dir} ]; then
++            mv ${common_out_dir} ${common_out_dir}-${target_device}
++            ln -s -r ${common_out_dir}-${target_device} ${common_out_dir}
++        else
++            [ -L ${common_out_dir} ] && rm ${common_out_dir}
++            mkdir -p ${common_out_dir}-${target_device}
++            ln -s -r ${common_out_dir}-${target_device} ${common_out_dir}
++        fi
++    else
++        [ -L ${common_out_dir} ] && rm ${common_out_dir}
++        mkdir -p ${common_out_dir}
++    fi
++}
++
+ # Force JAVA_HOME to point to java 1.7/1.8 if it isn't already set.
+ function set_java_home() {
+     # Clear the existing JAVA_HOME value if we set it ourselves, so that
+diff --git a/target/product/core.mk b/target/product/core.mk
+index a2b0f1c551..a2c213da33 100644
+--- a/target/product/core.mk
++++ b/target/product/core.mk
+@@ -24,7 +24,7 @@ PRODUCT_PACKAGES += \
+     BasicDreams \
+     BlockedNumberProvider \
+     BookmarkProvider \
+-    Browser2 \
++    Browser \
+     BuiltInPrintService \
+     Calendar \
+     CalendarProvider \
+diff --git a/tools/releasetools/edify_generator.py b/tools/releasetools/edify_generator.py
+index 0c44faf22f..b2a3ed5c70 100644
+--- a/tools/releasetools/edify_generator.py
++++ b/tools/releasetools/edify_generator.py
+@@ -159,6 +159,20 @@ class EdifyGenerator(object):
+            ");")
+     self.script.append(self.WordWrap(cmd))
+ 
++  def RunBackup(self, command):
++    self.script.append('package_extract_file("system/bin/backuptool.sh", "/tmp/backuptool.sh");')
++    self.script.append('package_extract_file("system/bin/backuptool.functions", "/tmp/backuptool.functions");')
++    if not self.info.get("use_set_metadata", False):
++      self.script.append('set_perm(0, 0, 0755, "/tmp/backuptool.sh");')
++      self.script.append('set_perm(0, 0, 0644, "/tmp/backuptool.functions");')
++    else:
++      self.script.append('set_metadata("/tmp/backuptool.sh", "uid", 0, "gid", 0, "mode", 0755);')
++      self.script.append('set_metadata("/tmp/backuptool.functions", "uid", 0, "gid", 0, "mode", 0644);')
++    self.script.append(('run_program("/tmp/backuptool.sh", "%s");' % command))
++    if command == "restore":
++        self.script.append('delete("/system/bin/backuptool.sh");')
++        self.script.append('delete("/system/bin/backuptool.functions");')
++
+   def ShowProgress(self, frac, dur):
+     """Update the progress bar, advancing it over 'frac' over the next
+     'dur' seconds.  'dur' may be zero to advance it via SetProgress
+diff --git a/tools/releasetools/ota_from_target_files.py b/tools/releasetools/ota_from_target_files.py
+index 3baacdc9d5..0e5cbc61a2 100755
+--- a/tools/releasetools/ota_from_target_files.py
++++ b/tools/releasetools/ota_from_target_files.py
+@@ -130,6 +130,10 @@ Usage:  ota_from_target_files [flags] input_target_files output_ota_package
+ 
+   --payload_signer_args <args>
+       Specify the arguments needed for payload signer.
++
++  --backup <boolean>
++      Enable or disable the execution of backuptool.sh.
++      Disabled by default.
+ """
+ 
+ from __future__ import print_function
+@@ -463,6 +467,12 @@ else if get_stage("%(bcb_dev)s") == "3/3" then
+ 
+   device_specific.FullOTA_InstallBegin()
+ 
++  if OPTIONS.backuptool:
++    script.AppendExtra('run_program("/sbin/umount", "/system");')
++    script.AppendExtra('run_program("/sbin/mount", "/system");')
++    script.RunBackup("backup")
++    script.AppendExtra('run_program("/sbin/umount", "/system");')
++
+   system_progress = 0.75
+ 
+   if OPTIONS.wipe_user_data:
+@@ -488,6 +498,9 @@ else if get_stage("%(bcb_dev)s") == "3/3" then
+   system_diff = common.BlockDifference("system", system_tgt, src=None)
+   system_diff.WriteScript(script, output_zip)
+ 
++  # SuperSU configuration
++  script.AppendExtra('run_program("/sbin/mv", "/system/supersu_config", "/system/.supersu");')
++
+   boot_img = common.GetBootableImage(
+       "boot.img", "boot.img", OPTIONS.input_tmp, "BOOT")
+ 
+@@ -505,6 +518,10 @@ else if get_stage("%(bcb_dev)s") == "3/3" then
+   script.ShowProgress(0.05, 5)
+   script.WriteRawImage("/boot", "boot.img")
+ 
++  if OPTIONS.backuptool:
++    script.ShowProgress(0.02, 10)
++    script.RunBackup("restore")
++
+   script.ShowProgress(0.2, 10)
+   device_specific.FullOTA_InstallEnd()
+ 
+@@ -1307,6 +1324,8 @@ def main(argv):
+       OPTIONS.updater_binary = a
+     elif o in ("--no_fallback_to_full",):
+       OPTIONS.fallback_to_full = False
++    elif o in ("--backup"):
++      OPTIONS.backuptool = bool(a.lower() == 'true')
+     elif o == "--stash_threshold":
+       try:
+         OPTIONS.stash_threshold = float(a)
+@@ -1348,6 +1367,7 @@ def main(argv):
+                                  "oem_no_mount",
+                                  "verify",
+                                  "no_fallback_to_full",
++                                 "backup=",
+                                  "stash_threshold=",
+                                  "gen_verify",
+                                  "log_diff=",

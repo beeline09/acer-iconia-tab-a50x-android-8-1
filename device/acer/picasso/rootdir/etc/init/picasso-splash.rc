@@ -1,0 +1,11 @@
+# PICASSO: early static splash. /system/etc/init/*.rc is imported right after
+# mount_all, so this runs a few seconds into boot - long before SurfaceFlinger
+# and the boot animation, which simply draw over it later. The raw frame is
+# 1280x800 R8G8B8A8 (tegra_fb format) for the first framebuffer page.
+on post-fs
+    exec - root graphics -- /system/bin/sh /system/bin/picasso-splash.sh
+
+# PICASSO: cfq instead of noop on the eMMC, so I/O priorities (bootanim
+# ioprio rt) work during the read-heavy boot.
+on post-fs
+    write /sys/block/mmcblk0/queue/scheduler cfq
